@@ -311,7 +311,7 @@ async def test_patch_null_and_whitespace_validation(client: AsyncClient):
     # 3. Test PATCH {"title": "   "} -> MUST BE 422 Unprocessable Entity
     blank_patch = await client.patch(f"/api/v1/tasks/{task_id}", json={"title": "   "}, headers=headers)
     assert blank_patch.status_code == 422
-    assert "at least 1 character" in str(blank_patch.json()) or "cannot be empty" in str(blank_patch.json())
+    assert "Title cannot be empty" in str(blank_patch.json())
 
     # 4. Test PATCH {"status": null} -> MUST BE 422
     null_status = await client.patch(f"/api/v1/tasks/{task_id}", json={"status": None}, headers=headers)
