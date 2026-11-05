@@ -68,9 +68,7 @@ class CacheService:
             logger.info("Connected to Redis cache successfully.")
         except Exception as exc:
             self._is_redis_available = False
-            logger.warning(
-                f"Redis connection failed ({exc}). Using in-memory fallback cache."
-            )
+            logger.warning(f"Redis connection failed ({exc}). Using in-memory fallback cache.")
 
     async def close(self) -> None:
         """Close Redis connection on shutdown."""

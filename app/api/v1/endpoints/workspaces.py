@@ -153,9 +153,7 @@ async def create_project_in_workspace(
     project_service: Annotated[ProjectService, Depends(get_project_service)],
 ) -> ProjectResponse:
     """Create a new project inside the workspace."""
-    return await project_service.create_project(
-        workspace_id=id, current_user=current_user, project_in=project_in
-    )
+    return await project_service.create_project(workspace_id=id, current_user=current_user, project_in=project_in)
 
 
 @router.get(

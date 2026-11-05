@@ -16,9 +16,7 @@ async def send_task_assignment_email(
 
     Executed in the background via FastAPI BackgroundTasks.
     """
-    logger.info(
-        f"[EMAIL NOTIFICATION] Sending task assignment email to {to_email}..."
-    )
+    logger.info(f"[EMAIL NOTIFICATION] Sending task assignment email to {to_email}...")
     # Simulate non-blocking network I/O
     await asyncio.sleep(0.05)
 
@@ -31,6 +29,4 @@ async def send_task_assignment_email(
         f"TaskHub Team"
     )
 
-    logger.info(
-        f"[EMAIL SENT] To: {to_email} | Subject: '{subject}' | Content: '{body.strip()}'"
-    )
+    logger.info(f"[EMAIL SENT] To: {to_email} | Subject: '{subject}' | Content: '{body.strip()}'")

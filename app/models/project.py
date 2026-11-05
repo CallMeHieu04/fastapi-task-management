@@ -18,9 +18,7 @@ class Project(Base):
     __tablename__ = "projects"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    workspace_id: Mapped[int] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
-    )
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[ProjectStatus] = mapped_column(
@@ -36,9 +34,5 @@ class Project(Base):
 
     # Relationships
     workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="projects")
-    tasks: Mapped[list["Task"]] = relationship(
-        "Task", back_populates="project", cascade="all, delete-orphan"
-    )
-    labels: Mapped[list["Label"]] = relationship(
-        "Label", back_populates="project", cascade="all, delete-orphan"
-    )
+    tasks: Mapped[list["Task"]] = relationship("Task", back_populates="project", cascade="all, delete-orphan")
+    labels: Mapped[list["Label"]] = relationship("Label", back_populates="project", cascade="all, delete-orphan")

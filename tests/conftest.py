@@ -49,6 +49,7 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 @pytest.fixture
 async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     """Provides an AsyncClient bound to the FastAPI app with test db override."""
+
     async def override_get_db():
         yield db_session
 

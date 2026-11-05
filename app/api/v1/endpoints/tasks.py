@@ -81,9 +81,7 @@ async def attach_label_to_task(
     task_service: Annotated[TaskService, Depends(get_task_service)],
 ) -> TaskResponse:
     """Attach an existing project label to the specified task."""
-    return await task_service.add_label_to_task(
-        task_id=id, label_id=label_id, current_user=current_user
-    )
+    return await task_service.add_label_to_task(task_id=id, label_id=label_id, current_user=current_user)
 
 
 @router.delete(
@@ -99,9 +97,7 @@ async def detach_label_from_task(
     task_service: Annotated[TaskService, Depends(get_task_service)],
 ) -> TaskResponse:
     """Detach a label from the specified task."""
-    return await task_service.remove_label_from_task(
-        task_id=id, label_id=label_id, current_user=current_user
-    )
+    return await task_service.remove_label_from_task(task_id=id, label_id=label_id, current_user=current_user)
 
 
 # Comment management on task
@@ -133,6 +129,4 @@ async def add_task_comment(
     comment_service: Annotated[CommentService, Depends(get_comment_service)],
 ) -> CommentResponse:
     """Add a new comment on the specified task."""
-    return await comment_service.add_comment(
-        task_id=id, current_user=current_user, comment_in=comment_in
-    )
+    return await comment_service.add_comment(task_id=id, current_user=current_user, comment_in=comment_in)

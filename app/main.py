@@ -1,8 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_v1_router
 from app.core.config import settings
+from app.core.exceptions import AppException
 from app.core.lifespan import lifespan
 
 app = FastAPI(
@@ -15,6 +17,18 @@ app = FastAPI(
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
     swagger_ui_parameters={"persistAuthorization": True},
 )
+
+
+@app.exception_handler(AppException)
+async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
+    """Centralized handler converting domain/business exceptions to HTTP responses."""
+    headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.message},
+        headers=headers,
+    )
+
 
 # CORS middleware
 if settings.BACKEND_CORS_ORIGINS:

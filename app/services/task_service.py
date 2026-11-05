@@ -1,9 +1,19 @@
 import math
 
-from fastapi import BackgroundTasks, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import BackgroundTasks
 
 from app.core.cache import cache_service
+from app.core.constants import (
+    DEFAULT_CACHE_TTL_SECONDS,
+    DEFAULT_PAGE,
+    DEFAULT_PAGE_SIZE,
+    MSG_LABEL_NOT_FOUND,
+    MSG_LABEL_NOT_IN_PROJECT,
+    MSG_PROJECT_NOT_FOUND,
+    MSG_TASK_NOT_FOUND,
+    MSG_USER_NOT_FOUND,
+)
+from app.core.exceptions import NotFoundException
 from app.core.notifications import send_task_assignment_email
 from app.models.enums import TaskPriority, TaskStatus, WorkspaceMemberRole
 from app.models.task import Task
@@ -19,13 +29,19 @@ from app.services.workspace_service import WorkspaceService
 
 
 class TaskService:
-    def __init__(self, session: AsyncSession) -> None:
-        self.session = session
-        self.task_repo = TaskRepository(session)
-        self.project_repo = ProjectRepository(session)
-        self.user_repo = UserRepository(session)
-        self.label_repo = LabelRepository(session)
-        self.workspace_service = WorkspaceService(session)
+    def __init__(
+        self,
+        task_repo: TaskRepository,
+        project_repo: ProjectRepository,
+        user_repo: UserRepository,
+        label_repo: LabelRepository,
+        workspace_service: WorkspaceService,
+    ) -> None:
+        self.task_repo = task_repo
+        self.project_repo = project_repo
+        self.user_repo = user_repo
+        self.label_repo = label_repo
+        self.workspace_service = workspace_service
 
     async def _invalidate_project_cache(self, project_id: int) -> None:
         """Invalidate all cached task lists for this project."""
@@ -61,34 +77,22 @@ class TaskService:
     ) -> TaskResponse:
         project = await self.project_repo.get_by_id(project_id)
         if not project:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Project #{project_id} not found.",
-            )
+            raise NotFoundException(MSG_PROJECT_NOT_FOUND.format(id=project_id))
 
-        # Check EDITOR access in the project's workspace
-        await self.workspace_service._check_workspace_access(
+        await self.workspace_service.check_workspace_access(
             project.workspace_id, current_user, required_role=WorkspaceMemberRole.EDITOR
         )
 
-        # If assignee_id specified, check that user exists and is member
         assignee_user = None
         if task_in.assignee_id:
             assignee_user = await self.user_repo.get_by_id(task_in.assignee_id)
             if not assignee_user:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Assignee user #{task_in.assignee_id} not found.",
-                )
+                raise NotFoundException(MSG_USER_NOT_FOUND.format(id=task_in.assignee_id))
 
-        created_task = await self.task_repo.create(
-            project_id=project_id, created_by=current_user.id, task_in=task_in
-        )
+        created_task = await self.task_repo.create(project_id=project_id, created_by=current_user.id, task_in=task_in)
 
-        # Invalidate task cache for project
         await self._invalidate_project_cache(project_id)
 
-        # Send background email notification if assignee is present
         if assignee_user and background_tasks:
             background_tasks.add_task(
                 send_task_assignment_email,
@@ -109,17 +113,14 @@ class TaskService:
         status_filter: TaskStatus | None = None,
         priority_filter: TaskPriority | None = None,
         assignee_id: int | None = None,
-        page: int = 1,
-        page_size: int = 20,
+        page: int = DEFAULT_PAGE,
+        page_size: int = DEFAULT_PAGE_SIZE,
     ) -> PaginatedResponse[TaskResponse]:
         project = await self.project_repo.get_by_id(project_id)
         if not project:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Project #{project_id} not found.",
-            )
+            raise NotFoundException(MSG_PROJECT_NOT_FOUND.format(id=project_id))
 
-        await self.workspace_service._check_workspace_access(project.workspace_id, current_user)
+        await self.workspace_service.check_workspace_access(project.workspace_id, current_user)
 
         cache_key = (
             f"tasks:project:{project_id}:"
@@ -151,20 +152,16 @@ class TaskService:
             ),
         )
 
-        # Cache response for fast subsequent queries (mode="json" serializes datetimes to ISO strings)
-        await cache_service.set_json(cache_key, response.model_dump(mode="json"), ttl=120)
+        await cache_service.set_json(cache_key, response.model_dump(mode="json"), ttl=DEFAULT_CACHE_TTL_SECONDS)
         return response
 
     async def get_task(self, task_id: int, current_user: User) -> TaskResponse:
         task = await self.task_repo.get_by_id(task_id)
         if not task:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Task #{task_id} not found.",
-            )
+            raise NotFoundException(MSG_TASK_NOT_FOUND.format(id=task_id))
         project = await self.project_repo.get_by_id(task.project_id)
         if project:
-            await self.workspace_service._check_workspace_access(project.workspace_id, current_user)
+            await self.workspace_service.check_workspace_access(project.workspace_id, current_user)
         return self._format_task_response(task)
 
     async def update_task(
@@ -176,26 +173,19 @@ class TaskService:
     ) -> TaskResponse:
         task = await self.task_repo.get_by_id(task_id)
         if not task:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Task #{task_id} not found.",
-            )
+            raise NotFoundException(MSG_TASK_NOT_FOUND.format(id=task_id))
         project = await self.project_repo.get_by_id(task.project_id)
         if project:
-            await self.workspace_service._check_workspace_access(
+            await self.workspace_service.check_workspace_access(
                 project.workspace_id, current_user, required_role=WorkspaceMemberRole.EDITOR
             )
 
-        # Check assignee change for background notification
         assignee_changed = False
         new_assignee_user = None
         if task_in.assignee_id is not None and task_in.assignee_id != task.assignee_id:
             new_assignee_user = await self.user_repo.get_by_id(task_in.assignee_id)
             if not new_assignee_user:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Assignee #{task_in.assignee_id} not found.",
-                )
+                raise NotFoundException(MSG_USER_NOT_FOUND.format(id=task_in.assignee_id))
             assignee_changed = True
 
         updated_task = await self.task_repo.update(task, task_in)
@@ -217,62 +207,43 @@ class TaskService:
     async def delete_task(self, task_id: int, current_user: User) -> None:
         task = await self.task_repo.get_by_id(task_id)
         if not task:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Task #{task_id} not found.",
-            )
+            raise NotFoundException(MSG_TASK_NOT_FOUND.format(id=task_id))
         project = await self.project_repo.get_by_id(task.project_id)
         if project:
-            await self.workspace_service._check_workspace_access(
+            await self.workspace_service.check_workspace_access(
                 project.workspace_id, current_user, required_role=WorkspaceMemberRole.EDITOR
             )
         await self.task_repo.delete(task)
         await self._invalidate_project_cache(task.project_id)
 
-    async def add_label_to_task(
-        self, task_id: int, label_id: int, current_user: User
-    ) -> TaskResponse:
+    async def add_label_to_task(self, task_id: int, label_id: int, current_user: User) -> TaskResponse:
         task = await self.task_repo.get_by_id(task_id)
         if not task:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Task #{task_id} not found.",
-            )
+            raise NotFoundException(MSG_TASK_NOT_FOUND.format(id=task_id))
         project = await self.project_repo.get_by_id(task.project_id)
         if project:
-            await self.workspace_service._check_workspace_access(
+            await self.workspace_service.check_workspace_access(
                 project.workspace_id, current_user, required_role=WorkspaceMemberRole.EDITOR
             )
         label = await self.label_repo.get_by_id(label_id)
         if not label or label.project_id != task.project_id:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Label #{label_id} not found in this project.",
-            )
+            raise NotFoundException(MSG_LABEL_NOT_IN_PROJECT.format(id=label_id))
         updated = await self.task_repo.add_label(task, label)
         await self._invalidate_project_cache(task.project_id)
         return self._format_task_response(updated)
 
-    async def remove_label_from_task(
-        self, task_id: int, label_id: int, current_user: User
-    ) -> TaskResponse:
+    async def remove_label_from_task(self, task_id: int, label_id: int, current_user: User) -> TaskResponse:
         task = await self.task_repo.get_by_id(task_id)
         if not task:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Task #{task_id} not found.",
-            )
+            raise NotFoundException(MSG_TASK_NOT_FOUND.format(id=task_id))
         project = await self.project_repo.get_by_id(task.project_id)
         if project:
-            await self.workspace_service._check_workspace_access(
+            await self.workspace_service.check_workspace_access(
                 project.workspace_id, current_user, required_role=WorkspaceMemberRole.EDITOR
             )
         label = await self.label_repo.get_by_id(label_id)
         if not label:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Label #{label_id} not found.",
-            )
+            raise NotFoundException(MSG_LABEL_NOT_FOUND.format(id=label_id))
         updated = await self.task_repo.remove_label(task, label)
         await self._invalidate_project_cache(task.project_id)
         return self._format_task_response(updated)

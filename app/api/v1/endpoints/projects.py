@@ -157,6 +157,4 @@ async def create_project_label(
     label_service: Annotated[LabelService, Depends(get_label_service)],
 ) -> LabelResponse:
     """Create a color-coded label inside this project."""
-    return await label_service.create_label(
-        project_id=id, current_user=current_user, label_in=label_in
-    )
+    return await label_service.create_label(project_id=id, current_user=current_user, label_in=label_in)

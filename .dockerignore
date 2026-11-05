@@ -11,3 +11,4 @@ htmlcov
 taskhub.db
 taskhub.db*
 .env
+

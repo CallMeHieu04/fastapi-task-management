@@ -1,4 +1,3 @@
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -15,9 +14,7 @@ class WorkspaceRepository:
         stmt = (
             select(Workspace)
             .where(Workspace.id == workspace_id)
-            .options(
-                selectinload(Workspace.members).joinedload(WorkspaceMember.user)
-            )
+            .options(selectinload(Workspace.members).joinedload(WorkspaceMember.user))
         )
         result = await self.session.execute(stmt)
         return result.scalars().first()
@@ -28,9 +25,7 @@ class WorkspaceRepository:
             select(Workspace)
             .join(WorkspaceMember, Workspace.id == WorkspaceMember.workspace_id)
             .where(WorkspaceMember.user_id == user_id)
-            .options(
-                selectinload(Workspace.members).joinedload(WorkspaceMember.user)
-            )
+            .options(selectinload(Workspace.members).joinedload(WorkspaceMember.user))
             .order_by(Workspace.created_at.desc())
         )
         result = await self.session.execute(stmt)
@@ -59,9 +54,7 @@ class WorkspaceRepository:
         result = await self.session.execute(stmt)
         return result.scalars().first()
 
-    async def add_member(
-        self, workspace_id: int, user_id: int, role: WorkspaceMemberRole
-    ) -> WorkspaceMember:
+    async def add_member(self, workspace_id: int, user_id: int, role: WorkspaceMemberRole) -> WorkspaceMember:
         member = await self.get_member(workspace_id, user_id)
         if member:
             member.role = role

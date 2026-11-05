@@ -1,8 +1,15 @@
 import jwt
-from fastapi import HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_service
+from app.core.constants import (
+    MSG_EMAIL_EXISTS,
+    MSG_INVALID_CREDENTIALS,
+    MSG_INVALID_TOKEN,
+    MSG_INVALID_TOKEN_TYPE,
+    MSG_TOKEN_REVOKED,
+    MSG_USER_INACTIVE,
+)
+from app.core.exceptions import BadRequestException, ForbiddenException, UnauthorizedException
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -18,16 +25,13 @@ from app.schemas.user import UserCreate, UserResponse
 
 
 class AuthService:
-    def __init__(self, session: AsyncSession) -> None:
-        self.user_repo = UserRepository(session)
+    def __init__(self, user_repo: UserRepository) -> None:
+        self.user_repo = user_repo
 
     async def register(self, user_in: UserCreate) -> UserResponse:
         existing = await self.user_repo.get_by_email(user_in.email)
         if existing:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="A user with this email address already exists.",
-            )
+            raise BadRequestException(MSG_EMAIL_EXISTS)
 
         user = User(
             email=user_in.email,
@@ -42,17 +46,10 @@ class AuthService:
     async def login(self, email: str, password: str) -> Token:
         user = await self.user_repo.get_by_email(email)
         if not user or not verify_password(password, user.hashed_password):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            raise UnauthorizedException(MSG_INVALID_CREDENTIALS)
 
         if not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User account is inactive.",
-            )
+            raise ForbiddenException(MSG_USER_INACTIVE)
 
         access_token = create_access_token(
             subject=user.id,
@@ -68,33 +65,19 @@ class AuthService:
 
     async def refresh_tokens(self, refresh_token: str) -> Token:
         if await cache_service.is_token_revoked(refresh_token):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Refresh token has been revoked.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            raise UnauthorizedException(MSG_TOKEN_REVOKED)
 
         try:
             payload = decode_token(refresh_token)
             if payload.get("type") != "refresh":
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid token type for refresh endpoint.",
-                )
+                raise UnauthorizedException(MSG_INVALID_TOKEN_TYPE)
             user_id = int(payload.get("sub", 0))
-        except jwt.PyJWTError as err:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired refresh token.",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from err
+        except (jwt.PyJWTError, ValueError) as err:
+            raise UnauthorizedException(MSG_INVALID_TOKEN) from err
 
         user = await self.user_repo.get_by_id(user_id)
         if not user or not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User inactive or not found.",
-            )
+            raise UnauthorizedException(MSG_USER_INACTIVE)
 
         # Invalidate old refresh token (token rotation)
         await cache_service.revoke_token(refresh_token)

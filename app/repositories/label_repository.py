@@ -1,4 +1,3 @@
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,9 +14,7 @@ class LabelRepository:
         return result.scalars().first()
 
     async def list_by_project(self, project_id: int) -> list[Label]:
-        result = await self.session.execute(
-            select(Label).where(Label.project_id == project_id)
-        )
+        result = await self.session.execute(select(Label).where(Label.project_id == project_id))
         return list(result.scalars().all())
 
     async def create(self, project_id: int, label_in: LabelCreate) -> Label:

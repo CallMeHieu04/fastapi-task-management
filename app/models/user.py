@@ -43,9 +43,5 @@ class User(Base):
     assigned_tasks: Mapped[list["Task"]] = relationship(
         "Task", foreign_keys="Task.assignee_id", back_populates="assignee"
     )
-    created_tasks: Mapped[list["Task"]] = relationship(
-        "Task", foreign_keys="Task.created_by", back_populates="creator"
-    )
-    comments: Mapped[list["Comment"]] = relationship(
-        "Comment", back_populates="author", cascade="all, delete-orphan"
-    )
+    created_tasks: Mapped[list["Task"]] = relationship("Task", foreign_keys="Task.created_by", back_populates="creator")
+    comments: Mapped[list["Comment"]] = relationship("Comment", back_populates="author", cascade="all, delete-orphan")

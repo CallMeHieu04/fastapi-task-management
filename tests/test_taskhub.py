@@ -1,5 +1,16 @@
+from unittest.mock import AsyncMock
+
 import pytest
 from httpx import AsyncClient
+
+from app.core.exceptions import NotFoundException
+from app.models.user import User
+from app.repositories.label_repository import LabelRepository
+from app.repositories.project_repository import ProjectRepository
+from app.repositories.task_repository import TaskRepository
+from app.repositories.user_repository import UserRepository
+from app.services.task_service import TaskService
+from app.services.workspace_service import WorkspaceService
 
 
 @pytest.mark.asyncio
@@ -46,30 +57,22 @@ async def test_auth_workflow(client: AsyncClient):
     refresh_token = tokens["refresh_token"]
 
     # 3. Refresh Token
-    refresh_res = await client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": refresh_token}
-    )
+    refresh_res = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
     assert refresh_res.status_code == 200
     new_tokens = refresh_res.json()
     assert "access_token" in new_tokens
     new_refresh = new_tokens["refresh_token"]
 
     # 4. Old refresh token should now be revoked
-    old_refresh_res = await client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": refresh_token}
-    )
+    old_refresh_res = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
     assert old_refresh_res.status_code == 401
 
     # 5. Logout with new refresh token
-    logout_res = await client.post(
-        "/api/v1/auth/logout", json={"refresh_token": new_refresh}
-    )
+    logout_res = await client.post("/api/v1/auth/logout", json={"refresh_token": new_refresh})
     assert logout_res.status_code == 200
 
     # Revoked token cannot refresh
-    after_logout_res = await client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": new_refresh}
-    )
+    after_logout_res = await client.post("/api/v1/auth/refresh", json={"refresh_token": new_refresh})
     assert after_logout_res.status_code == 401
 
 
@@ -104,16 +107,12 @@ async def test_user_profile_and_workspace_full_lifecycle(client: AsyncClient):
     assert me_res.json()["email"] == "owner@example.com"
 
     # Test PATCH /users/me
-    patch_me = await client.patch(
-        "/api/v1/users/me", json={"full_name": "Super Owner"}, headers=owner_headers
-    )
+    patch_me = await client.patch("/api/v1/users/me", json={"full_name": "Super Owner"}, headers=owner_headers)
     assert patch_me.status_code == 200
     assert patch_me.json()["full_name"] == "Super Owner"
 
     # 1. Create Workspace
-    ws_res = await client.post(
-        "/api/v1/workspaces", json={"name": "Engineering Workspace"}, headers=owner_headers
-    )
+    ws_res = await client.post("/api/v1/workspaces", json={"name": "Engineering Workspace"}, headers=owner_headers)
     assert ws_res.status_code == 201
     ws = ws_res.json()
     ws_id = ws["id"]
@@ -233,7 +232,6 @@ async def test_user_profile_and_workspace_full_lifecycle(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_rbac_permissions(client: AsyncClient):
-    # Create Owner and Viewer
     await client.post(
         "/api/v1/auth/register",
         json={"email": "rbac_owner@example.com", "full_name": "RBAC Owner", "password": "pass123456"},
@@ -258,20 +256,16 @@ async def test_rbac_permissions(client: AsyncClient):
     ).json()["access_token"]
     viewer_hdr = {"Authorization": f"Bearer {viewer_token}"}
 
-    # Owner creates workspace
-    ws_res = await client.post(
-        "/api/v1/workspaces", json={"name": "Secure Workspace"}, headers=owner_hdr
-    )
+    ws_res = await client.post("/api/v1/workspaces", json={"name": "Secure Workspace"}, headers=owner_hdr)
     ws_id = ws_res.json()["id"]
 
-    # Owner invites viewer as VIEWER
     await client.post(
         f"/api/v1/workspaces/{ws_id}/members",
         json={"email": "rbac_viewer@example.com", "role": "VIEWER"},
         headers=owner_hdr,
     )
 
-    # Viewer tries to create project -> Should fail (403 Forbidden)
+    # Viewer cannot create project (403)
     fail_proj = await client.post(
         f"/api/v1/workspaces/{ws_id}/projects",
         json={"name": "Viewer Not Allowed Project"},
@@ -279,6 +273,84 @@ async def test_rbac_permissions(client: AsyncClient):
     )
     assert fail_proj.status_code == 403
 
-    # Viewer tries to delete workspace -> Should fail (403 Forbidden)
+    # Viewer cannot delete workspace (403)
     fail_del_ws = await client.delete(f"/api/v1/workspaces/{ws_id}", headers=viewer_hdr)
     assert fail_del_ws.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_patch_null_and_whitespace_validation(client: AsyncClient):
+    """Test mentor Point 1 & Point 3: PATCH with explicit null or whitespace must be rejected with 422."""
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": "tester@example.com", "full_name": "Tester", "password": "pass123456"},
+    )
+    token = (
+        await client.post(
+            "/api/v1/auth/login",
+            json={"email": "tester@example.com", "password": "pass123456"},
+        )
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 1. Create workspace, project, and task
+    ws = (await client.post("/api/v1/workspaces", json={"name": "WS Test"}, headers=headers)).json()
+    proj = (
+        await client.post(f"/api/v1/workspaces/{ws['id']}/projects", json={"name": "Proj Test"}, headers=headers)
+    ).json()
+    task = (
+        await client.post(f"/api/v1/projects/{proj['id']}/tasks", json={"title": "Original Title"}, headers=headers)
+    ).json()
+    task_id = task["id"]
+
+    # 2. Test PATCH {"title": null} -> MUST BE 422 Unprocessable Entity (not 500!)
+    null_patch = await client.patch(f"/api/v1/tasks/{task_id}", json={"title": None}, headers=headers)
+    assert null_patch.status_code == 422
+    assert "Title cannot be null" in str(null_patch.json())
+
+    # 3. Test PATCH {"title": "   "} -> MUST BE 422 Unprocessable Entity
+    blank_patch = await client.patch(f"/api/v1/tasks/{task_id}", json={"title": "   "}, headers=headers)
+    assert blank_patch.status_code == 422
+    assert "at least 1 character" in str(blank_patch.json()) or "cannot be empty" in str(blank_patch.json())
+
+    # 4. Test PATCH {"status": null} -> MUST BE 422
+    null_status = await client.patch(f"/api/v1/tasks/{task_id}", json={"status": None}, headers=headers)
+    assert null_status.status_code == 422
+
+    # 5. Genuinely nullable field {"description": null} -> MUST BE 200 OK
+    valid_null_desc = await client.patch(f"/api/v1/tasks/{task_id}", json={"description": None}, headers=headers)
+    assert valid_null_desc.status_code == 200
+    assert valid_null_desc.json()["description"] is None
+
+    # 6. Verify GET /tasks/{task_id} still works cleanly (data was not corrupted!)
+    get_task = await client.get(f"/api/v1/tasks/{task_id}", headers=headers)
+    assert get_task.status_code == 200
+    assert get_task.json()["title"] == "Original Title"
+
+
+@pytest.mark.asyncio
+async def test_service_dependency_injection_with_mock_repository():
+    """Test mentor Point 4: Service calls injected self.task_repo, enabling easy mock injection."""
+    mock_task_repo = AsyncMock(spec=TaskRepository)
+    mock_project_repo = AsyncMock(spec=ProjectRepository)
+    mock_user_repo = AsyncMock(spec=UserRepository)
+    mock_label_repo = AsyncMock(spec=LabelRepository)
+    mock_ws_service = AsyncMock(spec=WorkspaceService)
+
+    # When get_by_id is called on mock, return None to trigger NotFoundException
+    mock_task_repo.get_by_id.return_value = None
+
+    service = TaskService(
+        task_repo=mock_task_repo,
+        project_repo=mock_project_repo,
+        user_repo=mock_user_repo,
+        label_repo=mock_label_repo,
+        workspace_service=mock_ws_service,
+    )
+
+    dummy_user = User(id=1, email="test@test.com", full_name="Test", hashed_password="pwd")
+    with pytest.raises(NotFoundException) as exc_info:
+        await service.get_task(task_id=999, current_user=dummy_user)
+
+    assert "Task #999 not found" in str(exc_info.value)
+    mock_task_repo.get_by_id.assert_called_once_with(999)

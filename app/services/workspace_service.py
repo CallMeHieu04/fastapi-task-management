@@ -1,7 +1,14 @@
-
-from fastapi import HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.core.constants import (
+    MSG_CANNOT_REMOVE_OWNER,
+    MSG_MEMBER_NOT_FOUND,
+    MSG_OWNER_ALREADY_MEMBER,
+    MSG_OWNER_REQUIRED,
+    MSG_USER_NOT_FOUND,
+    MSG_VIEWER_CANNOT_MODIFY,
+    MSG_WORKSPACE_ACCESS_DENIED,
+    MSG_WORKSPACE_NOT_FOUND,
+)
+from app.core.exceptions import BadRequestException, ForbiddenException, NotFoundException
 from app.models.enums import UserRole, WorkspaceMemberRole
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
@@ -16,37 +23,31 @@ from app.schemas.workspace import (
 
 
 class WorkspaceService:
-    def __init__(self, session: AsyncSession) -> None:
-        self.workspace_repo = WorkspaceRepository(session)
-        self.user_repo = UserRepository(session)
+    def __init__(self, workspace_repo: WorkspaceRepository, user_repo: UserRepository) -> None:
+        self.workspace_repo = workspace_repo
+        self.user_repo = user_repo
 
-    async def _check_workspace_access(
-        self, workspace_id: int, current_user: User, required_role: WorkspaceMemberRole | None = None
-    ):
+    async def check_workspace_access(
+        self,
+        workspace_id: int,
+        current_user: User,
+        required_role: WorkspaceMemberRole | None = None,
+    ) -> bool:
         """Helper to verify workspace membership and role hierarchy."""
         if current_user.role == UserRole.ADMIN:
             return True
 
         member = await self.workspace_repo.get_member(workspace_id, current_user.id)
         if not member:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have access to this workspace.",
-            )
+            raise ForbiddenException(MSG_WORKSPACE_ACCESS_DENIED)
 
         if required_role == WorkspaceMemberRole.OWNER and member.role != WorkspaceMemberRole.OWNER:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only workspace OWNER can perform this action.",
-            )
+            raise ForbiddenException(MSG_OWNER_REQUIRED)
 
         if required_role == WorkspaceMemberRole.EDITOR and member.role == WorkspaceMemberRole.VIEWER:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Workspace VIEWERS are not permitted to modify this resource.",
-            )
+            raise ForbiddenException(MSG_VIEWER_CANNOT_MODIFY)
 
-        return member
+        return True
 
     async def create_workspace(self, user_id: int, ws_in: WorkspaceCreate) -> WorkspaceResponse:
         workspace = await self.workspace_repo.create(name=ws_in.name, owner_id=user_id)
@@ -59,11 +60,8 @@ class WorkspaceService:
     async def get_workspace(self, workspace_id: int, current_user: User) -> WorkspaceResponse:
         workspace = await self.workspace_repo.get_by_id(workspace_id)
         if not workspace:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Workspace #{workspace_id} not found.",
-            )
-        await self._check_workspace_access(workspace_id, current_user)
+            raise NotFoundException(MSG_WORKSPACE_NOT_FOUND.format(id=workspace_id))
+        await self.check_workspace_access(workspace_id, current_user)
         return self._format_response(workspace)
 
     async def update_workspace(
@@ -71,11 +69,8 @@ class WorkspaceService:
     ) -> WorkspaceResponse:
         workspace = await self.workspace_repo.get_by_id(workspace_id)
         if not workspace:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Workspace #{workspace_id} not found.",
-            )
-        await self._check_workspace_access(workspace_id, current_user, required_role=WorkspaceMemberRole.OWNER)
+            raise NotFoundException(MSG_WORKSPACE_NOT_FOUND.format(id=workspace_id))
+        await self.check_workspace_access(workspace_id, current_user, required_role=WorkspaceMemberRole.OWNER)
 
         if ws_in.name:
             workspace = await self.workspace_repo.update(workspace, ws_in.name)
@@ -84,11 +79,8 @@ class WorkspaceService:
     async def delete_workspace(self, workspace_id: int, current_user: User) -> None:
         workspace = await self.workspace_repo.get_by_id(workspace_id)
         if not workspace:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Workspace #{workspace_id} not found.",
-            )
-        await self._check_workspace_access(workspace_id, current_user, required_role=WorkspaceMemberRole.OWNER)
+            raise NotFoundException(MSG_WORKSPACE_NOT_FOUND.format(id=workspace_id))
+        await self.check_workspace_access(workspace_id, current_user, required_role=WorkspaceMemberRole.OWNER)
         await self.workspace_repo.delete(workspace)
 
     async def add_member(
@@ -96,11 +88,8 @@ class WorkspaceService:
     ) -> WorkspaceMemberResponse:
         workspace = await self.workspace_repo.get_by_id(workspace_id)
         if not workspace:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Workspace #{workspace_id} not found.",
-            )
-        await self._check_workspace_access(workspace_id, current_user, required_role=WorkspaceMemberRole.OWNER)
+            raise NotFoundException(MSG_WORKSPACE_NOT_FOUND.format(id=workspace_id))
+        await self.check_workspace_access(workspace_id, current_user, required_role=WorkspaceMemberRole.OWNER)
 
         target_user = None
         if member_in.user_id:
@@ -109,16 +98,10 @@ class WorkspaceService:
             target_user = await self.user_repo.get_by_email(member_in.email)
 
         if not target_user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User to invite was not found.",
-            )
+            raise NotFoundException(MSG_USER_NOT_FOUND.format(id=member_in.user_id or member_in.email))
 
         if target_user.id == workspace.owner_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="The workspace owner already has full OWNER permissions.",
-            )
+            raise BadRequestException(MSG_OWNER_ALREADY_MEMBER)
 
         member = await self.workspace_repo.add_member(
             workspace_id=workspace_id,
@@ -132,29 +115,18 @@ class WorkspaceService:
             role=member.role,
         )
 
-    async def remove_member(
-        self, workspace_id: int, current_user: User, target_user_id: int
-    ) -> None:
+    async def remove_member(self, workspace_id: int, current_user: User, target_user_id: int) -> None:
         workspace = await self.workspace_repo.get_by_id(workspace_id)
         if not workspace:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Workspace #{workspace_id} not found.",
-            )
-        await self._check_workspace_access(workspace_id, current_user, required_role=WorkspaceMemberRole.OWNER)
+            raise NotFoundException(MSG_WORKSPACE_NOT_FOUND.format(id=workspace_id))
+        await self.check_workspace_access(workspace_id, current_user, required_role=WorkspaceMemberRole.OWNER)
 
         if target_user_id == workspace.owner_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot remove the owner from their own workspace.",
-            )
+            raise BadRequestException(MSG_CANNOT_REMOVE_OWNER)
 
         removed = await self.workspace_repo.remove_member(workspace_id, target_user_id)
         if not removed:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Member not found in workspace.",
-            )
+            raise NotFoundException(MSG_MEMBER_NOT_FOUND)
 
     def _format_response(self, workspace) -> WorkspaceResponse:
         members_data = []
