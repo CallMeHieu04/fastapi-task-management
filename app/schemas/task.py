@@ -9,9 +9,8 @@ from app.core.constants import (
     TASK_TITLE_MAX_LENGTH,
     TASK_TITLE_MIN_LENGTH,
 )
-from app.models.enums import TaskPriority, TaskStatus
+from app.models.task import TaskPriority, TaskStatus
 from app.schemas.common import BaseAppModel
-from app.schemas.label import LabelResponse
 
 
 class TaskBase(BaseAppModel):
@@ -21,7 +20,7 @@ class TaskBase(BaseAppModel):
         max_length=TASK_TITLE_MAX_LENGTH,
         description="Task title",
     )
-    description: str | None = Field(None, max_length=TASK_DESC_MAX_LENGTH)
+    description: str | None = Field(default=None, max_length=TASK_DESC_MAX_LENGTH)
     status: TaskStatus = Field(default=TaskStatus.TODO)
     priority: TaskPriority = Field(default=TaskPriority.MEDIUM)
     due_date: datetime | None = None
@@ -35,15 +34,11 @@ class TaskBase(BaseAppModel):
 
 
 class TaskCreate(TaskBase):
-    assignee_id: int | None = None
-    label_ids: list[int] | None = []
+    pass
 
 
 class TaskUpdate(BaseAppModel):
-    """Schema for updating a task.
-
-    Prevents sending explicit null or whitespace for non-nullable database fields.
-    """
+    """Schema for partial update (PATCH). Prevents sending explicit null on required fields."""
 
     title: str | None = Field(
         default=None,
@@ -54,7 +49,6 @@ class TaskUpdate(BaseAppModel):
     status: TaskStatus | None = None
     priority: TaskPriority | None = None
     due_date: datetime | None = None
-    assignee_id: int | None = None
 
     @field_validator("title")
     @classmethod
@@ -82,12 +76,7 @@ class TaskUpdate(BaseAppModel):
 
 class TaskResponse(TaskBase):
     id: int
-    project_id: int
-    assignee_id: int | None = None
-    assignee_name: str | None = None
-    created_by: int
     created_at: datetime
-    labels: list[LabelResponse] = []
-    comments_count: int = 0
+    updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

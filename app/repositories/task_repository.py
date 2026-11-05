@@ -1,124 +1,115 @@
-from sqlalchemy import delete, func, insert, select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from datetime import UTC, datetime
 
-from app.models.enums import TaskPriority, TaskStatus
-from app.models.label import Label
-from app.models.task import Task, task_labels
-from app.schemas.task import TaskCreate, TaskUpdate
+from app.models.task import TaskModel, TaskPriority, TaskStatus
 
 
 class TaskRepository:
-    def __init__(self, session: AsyncSession) -> None:
-        self.session = session
+    """In-memory data access layer storing internal TaskModel instances.
 
-    async def get_by_id(self, task_id: int) -> Task | None:
-        stmt = (
-            select(Task)
-            .where(Task.id == task_id)
-            .options(
-                selectinload(Task.labels),
-                selectinload(Task.comments),
-                selectinload(Task.assignee),
-                selectinload(Task.creator),
-                selectinload(Task.project),
+    Designed for clean dependency injection, easily swapped with a database repository later.
+    """
+
+    def __init__(self) -> None:
+        self._storage: dict[int, TaskModel] = {}
+        self._current_id: int = 0
+        self._seed_data()
+
+    def _seed_data(self) -> None:
+        now = datetime.now(UTC)
+        initial_tasks = [
+            (
+                "Setup FastAPI Layered Architecture",
+                "Organize project into api, core, models, schemas, repositories, and services.",
+                TaskStatus.DONE,
+                TaskPriority.HIGH,
+            ),
+            (
+                "Implement Task CRUD Endpoints",
+                "Create GET, POST, PATCH, DELETE endpoints with Pydantic v2 schemas.",
+                TaskStatus.IN_PROGRESS,
+                TaskPriority.HIGH,
+            ),
+            (
+                "Add Request Validation & Error Handling",
+                "Prevent null/whitespace PATCH requests and register domain exceptions.",
+                TaskStatus.TODO,
+                TaskPriority.MEDIUM,
+            ),
+        ]
+        for title, desc, status, priority in initial_tasks:
+            self._current_id += 1
+            self._storage[self._current_id] = TaskModel(
+                id=self._current_id,
+                title=title,
+                description=desc,
+                status=status,
+                priority=priority,
+                due_date=None,
+                created_at=now,
+                updated_at=now,
             )
-        )
-        result = await self.session.execute(stmt)
-        return result.scalars().first()
 
-    async def list_by_project(
+    async def get_by_id(self, task_id: int) -> TaskModel | None:
+        return self._storage.get(task_id)
+
+    async def get_all(
         self,
-        project_id: int,
-        status: TaskStatus | None = None,
-        priority: TaskPriority | None = None,
-        assignee_id: int | None = None,
         skip: int = 0,
         limit: int = 20,
-    ) -> tuple[list[Task], int]:
-        query = select(Task).where(Task.project_id == project_id)
+        status: TaskStatus | None = None,
+        priority: TaskPriority | None = None,
+        search: str | None = None,
+    ) -> tuple[list[TaskModel], int]:
+        items = list(self._storage.values())
 
         if status:
-            query = query.where(Task.status == status)
+            items = [t for t in items if t.status == status]
         if priority:
-            query = query.where(Task.priority == priority)
-        if assignee_id is not None:
-            query = query.where(Task.assignee_id == assignee_id)
+            items = [t for t in items if t.priority == priority]
+        if search:
+            query = search.lower()
+            items = [t for t in items if query in t.title.lower() or (t.description and query in t.description.lower())]
 
-        count_query = select(func.count()).select_from(query.subquery())
-        total_res = await self.session.execute(count_query)
-        total = total_res.scalar_one()
+        total = len(items)
+        paged = items[skip : skip + limit]
+        return paged, total
 
-        stmt = (
-            query.options(
-                selectinload(Task.labels),
-                selectinload(Task.comments),
-                selectinload(Task.assignee),
-            )
-            .order_by(Task.created_at.desc())
-            .offset(skip)
-            .limit(limit)
+    async def create(
+        self,
+        title: str,
+        description: str | None,
+        status: TaskStatus,
+        priority: TaskPriority,
+        due_date: datetime | None,
+    ) -> TaskModel:
+        self._current_id += 1
+        now = datetime.now(UTC)
+        model = TaskModel(
+            id=self._current_id,
+            title=title,
+            description=description,
+            status=status,
+            priority=priority,
+            due_date=due_date,
+            created_at=now,
+            updated_at=now,
         )
-        result = await self.session.execute(stmt)
-        items = list(result.scalars().all())
-        return items, total
+        self._storage[self._current_id] = model
+        return model
 
-    async def create(self, project_id: int, created_by: int, task_in: TaskCreate) -> Task:
-        task = Task(
-            project_id=project_id,
-            created_by=created_by,
-            title=task_in.title,
-            description=task_in.description,
-            status=task_in.status,
-            priority=task_in.priority,
-            due_date=task_in.due_date,
-            assignee_id=task_in.assignee_id,
-        )
-        self.session.add(task)
-        await self.session.flush()
+    async def update(self, task_id: int, update_data: dict) -> TaskModel | None:
+        task = self._storage.get(task_id)
+        if not task:
+            return None
 
-        # Handle initial labels directly via table insert to avoid implicit lazy load
-        if task_in.label_ids:
-            for lid in task_in.label_ids:
-                stmt = select(Label).where(Label.id == lid, Label.project_id == project_id)
-                res = await self.session.execute(stmt)
-                lbl = res.scalars().first()
-                if lbl:
-                    ins_stmt = insert(task_labels).values(task_id=task.id, label_id=lbl.id)
-                    await self.session.execute(ins_stmt)
-
-        await self.session.commit()
-        return await self.get_by_id(task.id)  # type: ignore
-
-    async def update(self, task: Task, task_in: TaskUpdate) -> Task:
-        update_data = task_in.model_dump(exclude_unset=True)
         for field, value in update_data.items():
-            setattr(task, field, value)
-        await self.session.commit()
-        return await self.get_by_id(task.id)  # type: ignore
+            if hasattr(task, field):
+                setattr(task, field, value)
+        task.updated_at = datetime.now(UTC)
+        return task
 
-    async def delete(self, task: Task) -> None:
-        await self.session.delete(task)
-        await self.session.commit()
-
-    async def add_label(self, task: Task, label: Label) -> Task:
-        # Check if already present
-        check_stmt = select(task_labels).where(
-            task_labels.c.task_id == task.id,
-            task_labels.c.label_id == label.id,
-        )
-        existing = (await self.session.execute(check_stmt)).first()
-        if not existing:
-            ins_stmt = insert(task_labels).values(task_id=task.id, label_id=label.id)
-            await self.session.execute(ins_stmt)
-            await self.session.commit()
-        return await self.get_by_id(task.id)  # type: ignore
-
-    async def remove_label(self, task: Task, label: Label) -> Task:
-        del_stmt = delete(task_labels).where(
-            task_labels.c.task_id == task.id,
-            task_labels.c.label_id == label.id,
-        )
-        await self.session.execute(del_stmt)
-        await self.session.commit()
-        return await self.get_by_id(task.id)  # type: ignore
+    async def delete(self, task_id: int) -> bool:
+        if task_id in self._storage:
+            del self._storage[task_id]
+            return True
+        return False

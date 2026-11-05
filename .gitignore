@@ -11,12 +11,17 @@ env/
 venv/
 ENV/
 
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
 # Testing & Coverage
 .pytest_cache/
 .coverage
 htmlcov/
 
-# Environment Variables
+# Environment
 .env
 .env.local
 
@@ -25,4 +30,3 @@ htmlcov/
 .vscode/
 *.swp
 *.swo
-
