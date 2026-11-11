@@ -29,3 +29,8 @@ class TaskPriority(str, enum.Enum):
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
     URGENT = "URGENT"
+
+
+class TokenType(str, enum.Enum):
+    ACCESS = "access"
+    REFRESH = "refresh"

@@ -24,6 +24,7 @@ htmlcov/
 # Environment
 .env
 .env.local
+uv.lock
 
 # IDE
 .idea/

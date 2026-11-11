@@ -36,13 +36,13 @@ class BaseRepository(Generic[ModelType]):
         items = list(res.scalars().all())
         return items, total
 
-    async def create(self, **kwargs: Any) -> ModelType:
-        """Create and persist a new model instance."""
-        instance = self.model(**kwargs)
-        self.session.add(instance)
+    async def create(self, instance: ModelType | None = None, **kwargs: Any) -> ModelType:
+        """Create and persist a new model instance, accepting an instance or kwargs."""
+        obj = instance if instance is not None else self.model(**kwargs)
+        self.session.add(obj)
         await self.session.commit()
-        await self.session.refresh(instance)
-        return instance
+        await self.session.refresh(obj)
+        return obj
 
     async def update(self, instance: ModelType, **kwargs: Any) -> ModelType:
         """Update existing instance attributes and persist changes."""

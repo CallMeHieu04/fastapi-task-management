@@ -21,9 +21,11 @@ app = FastAPI(
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
     """Centralized handler mapping domain exceptions to HTTP JSON responses."""
+    headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.message},
+        headers=headers,
     )
 
 

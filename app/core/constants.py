@@ -2,11 +2,11 @@
 # Model & Schema Field Constraints
 # ==============================================================================
 
-# User
+# User & Password (Bcrypt byte limit is 72 bytes, min 8 characters)
 USER_NAME_MIN_LENGTH = 2
 USER_NAME_MAX_LENGTH = 100
-PASSWORD_MIN_LENGTH = 6
-PASSWORD_MAX_LENGTH = 100
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_BYTES = 72
 
 # Workspace
 WORKSPACE_NAME_MIN_LENGTH = 1
@@ -51,15 +51,25 @@ MSG_LABEL_NOT_FOUND = "Label #{id} not found."
 MSG_LABEL_NOT_IN_PROJECT = "Label #{id} not found in this project."
 MSG_COMMENT_NOT_FOUND = "Comment #{id} not found."
 
+# Authentication & Security Messages
 MSG_EMAIL_EXISTS = "A user with this email address already exists."
 MSG_EMAIL_IN_USE = "Email is already in use by another account."
 MSG_INVALID_CREDENTIALS = "Incorrect email or password."
 MSG_USER_INACTIVE = "User account is inactive."
 MSG_TOKEN_REVOKED = "Refresh token has been revoked."
+MSG_TOKEN_EXPIRED = "Refresh token has expired."
+MSG_TOKEN_REUSED_REVOKED = "Token reuse detected. All sessions revoked."
 MSG_INVALID_TOKEN = "Invalid or expired token."
 MSG_INVALID_TOKEN_TYPE = "Invalid token type."
+MSG_ACCESS_TOKEN_REQUIRED = "Invalid token type. Access token expected."
+MSG_REFRESH_TOKEN_REQUIRED = "Invalid token type. Refresh token expected."
+MSG_COULD_NOT_VALIDATE = "Could not validate credentials."
 MSG_PASSWORD_MISMATCH = "Current password does not match."
+MSG_CANNOT_DELETE_SELF = "You cannot delete your own account."
+MSG_CANNOT_DELETE_LAST_ADMIN = "Cannot delete the last active administrator."
+MSG_ADMIN_REQUIRED = "Administrator privileges are required for this operation."
 
+# Authorization & Workspace Messages
 MSG_WORKSPACE_ACCESS_DENIED = "You do not have access to this workspace."
 MSG_OWNER_REQUIRED = "Only workspace OWNER can perform this action."
 MSG_VIEWER_CANNOT_MODIFY = "Workspace VIEWERS are not permitted to modify this resource."
