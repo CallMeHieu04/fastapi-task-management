@@ -1,115 +1,69 @@
-from datetime import UTC, datetime
+from datetime import datetime
 
-from app.models.task import TaskModel, TaskPriority, TaskStatus
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.enums import TaskPriority, TaskStatus
+from app.models.task import Task
+from app.repositories.base import BaseRepository
 
 
-class TaskRepository:
-    """In-memory data access layer storing internal TaskModel instances.
+class TaskRepository(BaseRepository[Task]):
+    """Specialized repository for Task entity inheriting BaseRepository[Task]."""
 
-    Designed for clean dependency injection, easily swapped with a database repository later.
-    """
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(Task, session)
 
-    def __init__(self) -> None:
-        self._storage: dict[int, TaskModel] = {}
-        self._current_id: int = 0
-        self._seed_data()
-
-    def _seed_data(self) -> None:
-        now = datetime.now(UTC)
-        initial_tasks = [
-            (
-                "Setup FastAPI Layered Architecture",
-                "Organize project into api, core, models, schemas, repositories, and services.",
-                TaskStatus.DONE,
-                TaskPriority.HIGH,
-            ),
-            (
-                "Implement Task CRUD Endpoints",
-                "Create GET, POST, PATCH, DELETE endpoints with Pydantic v2 schemas.",
-                TaskStatus.IN_PROGRESS,
-                TaskPriority.HIGH,
-            ),
-            (
-                "Add Request Validation & Error Handling",
-                "Prevent null/whitespace PATCH requests and register domain exceptions.",
-                TaskStatus.TODO,
-                TaskPriority.MEDIUM,
-            ),
-        ]
-        for title, desc, status, priority in initial_tasks:
-            self._current_id += 1
-            self._storage[self._current_id] = TaskModel(
-                id=self._current_id,
-                title=title,
-                description=desc,
-                status=status,
-                priority=priority,
-                due_date=None,
-                created_at=now,
-                updated_at=now,
-            )
-
-    async def get_by_id(self, task_id: int) -> TaskModel | None:
-        return self._storage.get(task_id)
-
-    async def get_all(
+    async def list_tasks(
         self,
         skip: int = 0,
         limit: int = 20,
         status: TaskStatus | None = None,
         priority: TaskPriority | None = None,
         search: str | None = None,
-    ) -> tuple[list[TaskModel], int]:
-        items = list(self._storage.values())
+        project_id: int | None = None,
+    ) -> tuple[list[Task], int]:
+        """Fetch tasks with filtering, search query, and pagination."""
+        query = select(Task)
 
+        if project_id is not None:
+            query = query.where(Task.project_id == project_id)
         if status:
-            items = [t for t in items if t.status == status]
+            query = query.where(Task.status == status)
         if priority:
-            items = [t for t in items if t.priority == priority]
+            query = query.where(Task.priority == priority)
         if search:
-            query = search.lower()
-            items = [t for t in items if query in t.title.lower() or (t.description and query in t.description.lower())]
+            pattern = f"%{search.lower()}%"
+            query = query.where((func.lower(Task.title).like(pattern)) | (func.lower(Task.description).like(pattern)))
 
-        total = len(items)
-        paged = items[skip : skip + limit]
-        return paged, total
+        # Count total matching rows
+        count_stmt = select(func.count()).select_from(query.subquery())
+        total_res = await self.session.execute(count_stmt)
+        total = total_res.scalar_one()
 
-    async def create(
+        # Fetch paginated slice ordered by creation time
+        stmt = query.order_by(Task.created_at.desc()).offset(skip).limit(limit)
+        result = await self.session.execute(stmt)
+        items = list(result.scalars().all())
+        return items, total
+
+    async def create_task(
         self,
         title: str,
-        description: str | None,
-        status: TaskStatus,
-        priority: TaskPriority,
-        due_date: datetime | None,
-    ) -> TaskModel:
-        self._current_id += 1
-        now = datetime.now(UTC)
-        model = TaskModel(
-            id=self._current_id,
+        description: str | None = None,
+        status: TaskStatus = TaskStatus.TODO,
+        priority: TaskPriority = TaskPriority.MEDIUM,
+        due_date: datetime | None = None,
+        project_id: int | None = None,
+        assignee_id: int | None = None,
+    ) -> Task:
+        """Create and persist a new task record."""
+        return await self.create(
             title=title,
             description=description,
             status=status,
             priority=priority,
             due_date=due_date,
-            created_at=now,
-            updated_at=now,
+            project_id=project_id,
+            assignee_id=assignee_id,
         )
-        self._storage[self._current_id] = model
-        return model
-
-    async def update(self, task_id: int, update_data: dict) -> TaskModel | None:
-        task = self._storage.get(task_id)
-        if not task:
-            return None
-
-        for field, value in update_data.items():
-            if hasattr(task, field):
-                setattr(task, field, value)
-        task.updated_at = datetime.now(UTC)
-        return task
-
-    async def delete(self, task_id: int) -> bool:
-        if task_id in self._storage:
-            del self._storage[task_id]
-            return True
-        return False

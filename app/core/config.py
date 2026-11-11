@@ -5,12 +5,15 @@ class Settings(BaseSettings):
     """Application configuration settings."""
 
     PROJECT_NAME: str = "TaskHub"
-    PROJECT_DESCRIPTION: str = "TaskHub API — Session 1: Core Setup & Architecture"
-    VERSION: str = "0.1.0"
+    PROJECT_DESCRIPTION: str = "TaskHub API — Task Management System"
+    VERSION: str = "0.2.0"
     API_V1_STR: str = "/api/v1"
     DEBUG: bool = True
     HOST: str = "127.0.0.1"
     PORT: int = 8000
+
+    # Database Configuration (SQLAlchemy 2.x async)
+    DATABASE_URL: str = "sqlite+aiosqlite:///./taskhub.db"
 
     model_config = SettingsConfigDict(
         env_file=".env",

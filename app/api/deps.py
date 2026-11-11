@@ -1,19 +1,20 @@
 from typing import Annotated
 
 from fastapi import Depends, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
-from app.models.task import TaskPriority, TaskStatus
+from app.db.session import get_db
+from app.models.enums import TaskPriority, TaskStatus
 from app.repositories.task_repository import TaskRepository
 from app.services.task_service import TaskService
 
-# Singleton repository instance holding in-memory data for local runtime
-_task_repository = TaskRepository()
 
-
-def get_task_repository() -> TaskRepository:
-    """Dependency provider for TaskRepository."""
-    return _task_repository
+def get_task_repository(
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> TaskRepository:
+    """Dependency provider for TaskRepository with injected DB session."""
+    return TaskRepository(session=session)
 
 
 def get_task_service(

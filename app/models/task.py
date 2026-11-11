@@ -1,31 +1,77 @@
-import enum
-from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Table, Text
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base
+from app.models.enums import TaskPriority, TaskStatus
+
+if TYPE_CHECKING:
+    from app.models.comment import Comment
+    from app.models.label import Label
+    from app.models.project import Project
+    from app.models.user import User
+
+# Association table between tasks and labels (Many-to-Many)
+task_labels = Table(
+    "task_labels",
+    Base.metadata,
+    Column("task_id", Integer, ForeignKey("tasks.id", ondelete="CASCADE"), primary_key=True),
+    Column("label_id", Integer, ForeignKey("labels.id", ondelete="CASCADE"), primary_key=True),
+)
 
 
-class TaskStatus(str, enum.Enum):
-    TODO = "TODO"
-    IN_PROGRESS = "IN_PROGRESS"
-    IN_REVIEW = "IN_REVIEW"
-    DONE = "DONE"
+class Task(Base):
+    __tablename__ = "tasks"
 
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    assignee_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[TaskStatus] = mapped_column(
+        SAEnum(TaskStatus, name="task_status_enum", native_enum=False),
+        default=TaskStatus.TODO,
+        nullable=False,
+        index=True,
+    )
+    priority: Mapped[TaskPriority] = mapped_column(
+        SAEnum(TaskPriority, name="task_priority_enum", native_enum=False),
+        default=TaskPriority.MEDIUM,
+        nullable=False,
+        index=True,
+    )
+    due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
 
-class TaskPriority(str, enum.Enum):
-    LOW = "LOW"
-    MEDIUM = "MEDIUM"
-    HIGH = "HIGH"
-    URGENT = "URGENT"
-
-
-@dataclass
-class TaskModel:
-    """Internal domain model for storage, decoupled from API response schemas."""
-
-    id: int
-    title: str
-    description: str | None
-    status: TaskStatus
-    priority: TaskPriority
-    due_date: datetime | None
-    created_at: datetime
-    updated_at: datetime
+    # Relationships with eager selectin loading
+    project: Mapped["Project | None"] = relationship("Project", back_populates="tasks", lazy="selectin")
+    assignee: Mapped["User | None"] = relationship(
+        "User", foreign_keys=[assignee_id], back_populates="assigned_tasks", lazy="selectin"
+    )
+    creator: Mapped["User | None"] = relationship(
+        "User", foreign_keys=[created_by], back_populates="created_tasks", lazy="selectin"
+    )
+    labels: Mapped[list["Label"]] = relationship(
+        "Label", secondary=task_labels, back_populates="tasks", lazy="selectin"
+    )
+    comments: Mapped[list["Comment"]] = relationship(
+        "Comment", back_populates="task", cascade="all, delete-orphan", lazy="selectin"
+    )
