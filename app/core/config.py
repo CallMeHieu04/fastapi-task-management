@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +15,15 @@ class Settings(BaseSettings):
 
     # Database Configuration (SQLAlchemy 2.x async)
     DATABASE_URL: str = "sqlite+aiosqlite:///./taskhub.db"
+    DB_ECHO: bool = False
+
+    # Security Configuration
+    SECRET_KEY: str = Field(
+        default="taskhub-secret-key-32-chars-long-secure-production-2026-key",
+        min_length=32,
+        description="JWT Secret key must be at least 32 characters",
+    )
+    ALGORITHM: str = "HS256"
 
     model_config = SettingsConfigDict(
         env_file=".env",
