@@ -23,9 +23,11 @@ from app.models.user import User
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.task_repository import TaskRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.workspace_repository import WorkspaceRepository
 from app.services.auth_service import AuthService
 from app.services.task_service import TaskService
 from app.services.user_service import UserService
+from app.services.workspace_service import WorkspaceService
 
 # Bearer token security scheme for OpenAPI
 security_scheme = HTTPBearer(auto_error=True)
@@ -52,6 +54,11 @@ def get_refresh_token_repository(session: DbSession) -> RefreshTokenRepository:
 def get_task_repository(session: DbSession) -> TaskRepository:
     """Dependency provider for TaskRepository."""
     return TaskRepository(session=session)
+
+
+def get_workspace_repository(session: DbSession) -> WorkspaceRepository:
+    """Dependency provider for WorkspaceRepository."""
+    return WorkspaceRepository(session=session)
 
 
 # ==============================================================================
@@ -123,6 +130,14 @@ def get_user_service(
 ) -> UserService:
     """Dependency provider for UserService."""
     return UserService(user_repo=user_repo, token_repo=token_repo)
+
+
+def get_workspace_service(
+    workspace_repo: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
+    user_repo: Annotated[UserRepository, Depends(get_user_repository)],
+) -> WorkspaceService:
+    """Dependency provider for WorkspaceService."""
+    return WorkspaceService(workspace_repo=workspace_repo, user_repo=user_repo)
 
 
 def get_task_service(
