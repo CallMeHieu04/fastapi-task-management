@@ -24,6 +24,7 @@ class TaskBase(BaseAppModel):
     status: TaskStatus = Field(default=TaskStatus.TODO)
     priority: TaskPriority = Field(default=TaskPriority.MEDIUM)
     due_date: datetime | None = None
+    assignee_id: int | None = None
 
     @field_validator("title")
     @classmethod
@@ -34,7 +35,7 @@ class TaskBase(BaseAppModel):
 
 
 class TaskCreate(TaskBase):
-    pass
+    project_id: int | None = None
 
 
 class TaskUpdate(BaseAppModel):
@@ -49,6 +50,7 @@ class TaskUpdate(BaseAppModel):
     status: TaskStatus | None = None
     priority: TaskPriority | None = None
     due_date: datetime | None = None
+    assignee_id: int | None = None
 
     @field_validator("title")
     @classmethod
@@ -76,6 +78,9 @@ class TaskUpdate(BaseAppModel):
 
 class TaskResponse(TaskBase):
     id: int
+    project_id: int | None = None
+    assignee_id: int | None = None
+    created_by: int | None = None
     created_at: datetime
     updated_at: datetime
 

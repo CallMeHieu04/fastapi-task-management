@@ -20,17 +20,20 @@ from app.core.security import decode_token
 from app.db.session import get_db
 from app.models.enums import TaskPriority, TaskStatus, TokenType, UserRole
 from app.models.user import User
+from app.repositories.project_repository import ProjectRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.task_repository import TaskRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.workspace_repository import WorkspaceRepository
 from app.services.auth_service import AuthService
+from app.services.project_service import ProjectService
 from app.services.task_service import TaskService
 from app.services.user_service import UserService
 from app.services.workspace_service import WorkspaceService
 
-# Bearer token security scheme for OpenAPI
+# Bearer token security schemes for OpenAPI
 security_scheme = HTTPBearer(auto_error=True)
+optional_security_scheme = HTTPBearer(auto_error=False)
 
 # Annotated Type Alias for DB Session
 DbSession = Annotated[AsyncSession, Depends(get_db)]
@@ -59,6 +62,11 @@ def get_task_repository(session: DbSession) -> TaskRepository:
 def get_workspace_repository(session: DbSession) -> WorkspaceRepository:
     """Dependency provider for WorkspaceRepository."""
     return WorkspaceRepository(session=session)
+
+
+def get_project_repository(session: DbSession) -> ProjectRepository:
+    """Dependency provider for ProjectRepository."""
+    return ProjectRepository(session=session)
 
 
 # ==============================================================================
@@ -97,6 +105,30 @@ async def get_current_user(
     return user
 
 
+async def get_optional_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_security_scheme)],
+    user_repo: Annotated[UserRepository, Depends(get_user_repository)],
+) -> User | None:
+    """Decode access token if provided, returning User or None without throwing 401."""
+    if not credentials:
+        return None
+    token = credentials.credentials
+    try:
+        payload = decode_token(token)
+        if payload.get("type") != TokenType.ACCESS.value:
+            return None
+        sub_raw = payload.get("sub")
+        if sub_raw is None:
+            return None
+        user_id = int(sub_raw)
+        user = await user_repo.get_by_id(user_id)
+        if user and user.is_active:
+            return user
+    except Exception:
+        return None
+    return None
+
+
 async def get_current_admin_user(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
@@ -108,6 +140,7 @@ async def get_current_admin_user(
 
 # Annotated Type Aliases for Current User & Admin
 CurrentUser = Annotated[User, Depends(get_current_user)]
+OptionalCurrentUser = Annotated[User | None, Depends(get_optional_current_user)]
 CurrentAdmin = Annotated[User, Depends(get_current_admin_user)]
 
 
@@ -140,11 +173,27 @@ def get_workspace_service(
     return WorkspaceService(workspace_repo=workspace_repo, user_repo=user_repo)
 
 
+def get_project_service(
+    project_repo: Annotated[ProjectRepository, Depends(get_project_repository)],
+    workspace_service: Annotated[WorkspaceService, Depends(get_workspace_service)],
+) -> ProjectService:
+    """Dependency provider for ProjectService."""
+    return ProjectService(project_repo=project_repo, workspace_service=workspace_service)
+
+
 def get_task_service(
     repository: Annotated[TaskRepository, Depends(get_task_repository)],
+    project_repo: Annotated[ProjectRepository, Depends(get_project_repository)],
+    workspace_service: Annotated[WorkspaceService, Depends(get_workspace_service)],
+    user_repo: Annotated[UserRepository, Depends(get_user_repository)],
 ) -> TaskService:
     """Dependency provider for TaskService."""
-    return TaskService(repository=repository)
+    return TaskService(
+        repository=repository,
+        project_repo=project_repo,
+        workspace_service=workspace_service,
+        user_repo=user_repo,
+    )
 
 
 # ==============================================================================
@@ -160,6 +209,7 @@ class TaskFilterParams:
         status: Annotated[TaskStatus | None, Query(description="Filter by task status")] = None,
         priority: Annotated[TaskPriority | None, Query(description="Filter by priority")] = None,
         search: Annotated[str | None, Query(max_length=50, description="Keyword search in title/desc")] = None,
+        project_id: Annotated[int | None, Query(description="Filter by project ID")] = None,
         page: Annotated[int, Query(ge=1, description="Page number starting at 1")] = DEFAULT_PAGE,
         limit: Annotated[
             int, Query(ge=1, le=MAX_PAGE_SIZE, description=f"Items per page (max {MAX_PAGE_SIZE})")
@@ -168,5 +218,6 @@ class TaskFilterParams:
         self.status = status
         self.priority = priority
         self.search = search
+        self.project_id = project_id
         self.page = page
         self.limit = limit

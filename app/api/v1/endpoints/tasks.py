@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, status
 
-from app.api.deps import TaskFilterParams, get_task_service
+from app.api.deps import OptionalCurrentUser, TaskFilterParams, get_task_service
 from app.schemas.common import PaginatedResponse
 from app.schemas.task import TaskCreate, TaskResponse, TaskUpdate
 from app.services.task_service import TaskService
@@ -15,7 +15,7 @@ router = APIRouter()
     response_model=PaginatedResponse[TaskResponse],
     status_code=status.HTTP_200_OK,
     summary="List all tasks",
-    description="Retrieve paginated tasks with optional status, priority, and keyword filtering.",
+    description="Retrieve paginated tasks with optional status, priority, project_id, and keyword filtering.",
 )
 @router.get(
     "/",
@@ -25,6 +25,7 @@ router = APIRouter()
 )
 async def list_tasks(
     filters: Annotated[TaskFilterParams, Depends()],
+    current_user: OptionalCurrentUser,
     service: Annotated[TaskService, Depends(get_task_service)],
 ) -> PaginatedResponse[TaskResponse]:
     return await service.list_tasks(
@@ -33,6 +34,8 @@ async def list_tasks(
         search=filters.search,
         page=filters.page,
         page_size=filters.limit,
+        project_id=filters.project_id,
+        current_user=current_user,
     )
 
 
@@ -41,7 +44,7 @@ async def list_tasks(
     response_model=TaskResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new task",
-    description="Create a task with validated title, optional description, status, and priority.",
+    description="Create a task with validated title, optional description, status, priority, and project attachment.",
 )
 @router.post(
     "/",
@@ -51,9 +54,10 @@ async def list_tasks(
 )
 async def create_task(
     task_in: TaskCreate,
+    current_user: OptionalCurrentUser,
     service: Annotated[TaskService, Depends(get_task_service)],
 ) -> TaskResponse:
-    return await service.create_task(task_in=task_in)
+    return await service.create_task(task_in=task_in, current_user=current_user)
 
 
 @router.get(
@@ -65,9 +69,10 @@ async def create_task(
 )
 async def get_task(
     id: Annotated[int, Path(ge=1, description="The ID of the task")],
+    current_user: OptionalCurrentUser,
     service: Annotated[TaskService, Depends(get_task_service)],
 ) -> TaskResponse:
-    return await service.get_task(task_id=id)
+    return await service.get_task(task_id=id, current_user=current_user)
 
 
 @router.patch(
@@ -80,9 +85,10 @@ async def get_task(
 async def update_task(
     id: Annotated[int, Path(ge=1, description="The ID of the task")],
     task_in: TaskUpdate,
+    current_user: OptionalCurrentUser,
     service: Annotated[TaskService, Depends(get_task_service)],
 ) -> TaskResponse:
-    return await service.update_task(task_id=id, task_in=task_in)
+    return await service.update_task(task_id=id, task_in=task_in, current_user=current_user)
 
 
 @router.delete(
@@ -93,6 +99,7 @@ async def update_task(
 )
 async def delete_task(
     id: Annotated[int, Path(ge=1, description="The ID of the task")],
+    current_user: OptionalCurrentUser,
     service: Annotated[TaskService, Depends(get_task_service)],
 ) -> None:
-    await service.delete_task(task_id=id)
+    await service.delete_task(task_id=id, current_user=current_user)

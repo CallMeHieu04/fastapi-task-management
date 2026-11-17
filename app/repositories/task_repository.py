@@ -56,6 +56,7 @@ class TaskRepository(BaseRepository[Task]):
         due_date: datetime | None = None,
         project_id: int | None = None,
         assignee_id: int | None = None,
+        created_by: int | None = None,
     ) -> Task:
         """Create and persist a new task record."""
         return await self.create(
@@ -66,4 +67,5 @@ class TaskRepository(BaseRepository[Task]):
             due_date=due_date,
             project_id=project_id,
             assignee_id=assignee_id,
+            created_by=created_by,
         )
