@@ -11,6 +11,7 @@ from app.core.constants import (
 )
 from app.models.task import TaskPriority, TaskStatus
 from app.schemas.common import BaseAppModel
+from app.schemas.label import LabelResponse
 
 
 class TaskBase(BaseAppModel):
@@ -94,6 +95,7 @@ class TaskResponse(TaskBase):
     project_id: int | None = None
     assignee_id: int | None = None
     created_by: int | None = None
+    labels: list[LabelResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

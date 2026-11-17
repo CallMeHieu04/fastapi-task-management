@@ -18,12 +18,16 @@ from app.core.security import decode_token_claim
 from app.db.session import get_db
 from app.models.enums import TaskPriority, TaskStatus, TokenType, UserRole
 from app.models.user import User
+from app.repositories.comment_repository import CommentRepository
+from app.repositories.label_repository import LabelRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.task_repository import TaskRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.workspace_repository import WorkspaceRepository
 from app.services.auth_service import AuthService
+from app.services.comment_service import CommentService
+from app.services.label_service import LabelService
 from app.services.project_service import ProjectService
 from app.services.task_service import TaskService
 from app.services.user_service import UserService
@@ -64,6 +68,16 @@ def get_workspace_repository(session: DbSession) -> WorkspaceRepository:
 def get_project_repository(session: DbSession) -> ProjectRepository:
     """Dependency provider for ProjectRepository."""
     return ProjectRepository(session=session)
+
+
+def get_label_repository(session: DbSession) -> LabelRepository:
+    """Dependency provider for LabelRepository."""
+    return LabelRepository(session=session)
+
+
+def get_comment_repository(session: DbSession) -> CommentRepository:
+    """Dependency provider for CommentRepository."""
+    return CommentRepository(session=session)
 
 
 # ==============================================================================
@@ -158,6 +172,36 @@ def get_task_service(
         project_repo=project_repo,
         workspace_service=workspace_service,
         user_repo=user_repo,
+    )
+
+
+def get_label_service(
+    label_repo: Annotated[LabelRepository, Depends(get_label_repository)],
+    project_repo: Annotated[ProjectRepository, Depends(get_project_repository)],
+    task_repo: Annotated[TaskRepository, Depends(get_task_repository)],
+    workspace_service: Annotated[WorkspaceService, Depends(get_workspace_service)],
+) -> LabelService:
+    """Dependency provider for LabelService."""
+    return LabelService(
+        label_repo=label_repo,
+        project_repo=project_repo,
+        task_repo=task_repo,
+        workspace_service=workspace_service,
+    )
+
+
+def get_comment_service(
+    comment_repo: Annotated[CommentRepository, Depends(get_comment_repository)],
+    task_repo: Annotated[TaskRepository, Depends(get_task_repository)],
+    project_repo: Annotated[ProjectRepository, Depends(get_project_repository)],
+    workspace_service: Annotated[WorkspaceService, Depends(get_workspace_service)],
+) -> CommentService:
+    """Dependency provider for CommentService."""
+    return CommentService(
+        comment_repo=comment_repo,
+        task_repo=task_repo,
+        project_repo=project_repo,
+        workspace_service=workspace_service,
     )
 
 

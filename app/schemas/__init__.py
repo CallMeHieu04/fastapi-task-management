@@ -1,4 +1,6 @@
+from app.schemas.comment import CommentCreate, CommentResponse, CommentUpdate
 from app.schemas.common import BaseAppModel, MessageResponse, PaginatedResponse, PaginationMeta
+from app.schemas.label import LabelCreate, LabelResponse, LabelUpdate
 from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
 from app.schemas.task import ProjectTaskCreate, TaskCreate, TaskResponse, TaskUpdate
 from app.schemas.token import RefreshTokenRequest, Token
@@ -23,6 +25,12 @@ __all__ = [
     "TaskCreate",
     "TaskUpdate",
     "TaskResponse",
+    "LabelCreate",
+    "LabelUpdate",
+    "LabelResponse",
+    "CommentCreate",
+    "CommentUpdate",
+    "CommentResponse",
     "Token",
     "RefreshTokenRequest",
     "UserCreate",
