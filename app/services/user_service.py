@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from app.core.constants import (
     MSG_CANNOT_DELETE_LAST_ADMIN,
     MSG_CANNOT_DELETE_SELF,
+    MSG_CANNOT_DELETE_WORKSPACE_OWNER,
     MSG_EMAIL_IN_USE,
     MSG_PASSWORD_MISMATCH,
     MSG_USER_NOT_FOUND,
@@ -12,7 +13,7 @@ from app.core.exceptions import (
     ConflictException,
     NotFoundException,
 )
-from app.core.security import hash_password, verify_password
+from app.core.security import hash_password, verify_password_async
 from app.models.enums import UserRole
 from app.models.user import User
 from app.repositories.refresh_token_repository import RefreshTokenRepository
@@ -51,16 +52,16 @@ class UserService:
             raise ConflictException(MSG_EMAIL_IN_USE) from err
 
     async def change_password(self, user: User, change_in: ChangePassword) -> None:
-        """Change user password and revoke all existing refresh tokens."""
-        if not verify_password(change_in.current_password, user.hashed_password):
+        """Change user password and revoke all existing refresh tokens in a single atomic transaction."""
+        is_valid = await verify_password_async(change_in.current_password, user.hashed_password)
+        if not is_valid:
             raise BadRequestException(MSG_PASSWORD_MISMATCH)
 
         user.hashed_password = hash_password(change_in.new_password)
         await self.user_repo.update(user)
 
-        # Invalidate all active refresh tokens for this user upon password change
+        # Invalidate all active refresh tokens for this user upon password change (flushed within same transaction)
         await self.token_repo.revoke_all_for_user(user.id)
-        await self.user_repo.session.commit()
 
     async def get_user_by_id(self, user_id: int) -> UserResponse:
         """Get user details by ID (Admin or internal)."""
@@ -70,7 +71,10 @@ class UserService:
         return UserResponse.model_validate(target)
 
     async def delete_user(self, current_admin: User, target_user_id: int) -> None:
-        """Delete user account (Admin only). Prevents self-deletion and deleting last admin."""
+        """Delete user account (Admin only).
+
+        Prevents self-deletion, deleting last admin, and deleting workspace owners.
+        """
         if current_admin.id == target_user_id:
             raise BadRequestException(MSG_CANNOT_DELETE_SELF)
 
@@ -83,6 +87,8 @@ class UserService:
             if admin_count <= 1:
                 raise BadRequestException(MSG_CANNOT_DELETE_LAST_ADMIN)
 
-        # Revoke all tokens then delete user
-        await self.token_repo.revoke_all_for_user(target_user_id)
-        await self.user_repo.delete(target)
+        try:
+            await self.user_repo.delete(target)
+        except IntegrityError as err:
+            await self.user_repo.session.rollback()
+            raise BadRequestException(MSG_CANNOT_DELETE_WORKSPACE_OWNER) from err

@@ -1,13 +1,11 @@
 from datetime import UTC, datetime
 
-import jwt
 from sqlalchemy.exc import IntegrityError
 
 from app.core.constants import (
     MSG_EMAIL_EXISTS,
     MSG_INVALID_CREDENTIALS,
     MSG_INVALID_TOKEN,
-    MSG_REFRESH_TOKEN_REQUIRED,
     MSG_TOKEN_EXPIRED,
     MSG_TOKEN_REUSED_REVOKED,
     MSG_USER_INACTIVE,
@@ -18,11 +16,12 @@ from app.core.exceptions import (
     UnauthorizedException,
 )
 from app.core.security import (
+    DUMMY_PASSWORD_HASH,
     create_access_token,
     create_refresh_token,
-    decode_token,
+    decode_token_claim,
     hash_password,
-    verify_password,
+    verify_password_async,
 )
 from app.models.enums import TokenType, UserRole
 from app.models.user import User
@@ -60,9 +59,19 @@ class AuthService:
             raise ConflictException(MSG_EMAIL_EXISTS) from err
 
     async def login(self, login_data: UserLogin) -> Token:
-        """Authenticate user and issue access/refresh token pair."""
+        """Authenticate user and issue access/refresh token pair.
+
+        Protects against timing attacks by hashing a dummy payload when user is not found,
+        and offloads bcrypt verification to a threadpool.
+        """
         user = await self.user_repo.get_by_email(login_data.email)
-        if not user or not verify_password(login_data.password, user.hashed_password):
+        if user:
+            is_valid = await verify_password_async(login_data.password, user.hashed_password)
+        else:
+            await verify_password_async(login_data.password, DUMMY_PASSWORD_HASH)
+            is_valid = False
+
+        if not user or not is_valid:
             raise UnauthorizedException(MSG_INVALID_CREDENTIALS)
 
         if not user.is_active:
@@ -75,12 +84,10 @@ class AuthService:
         refresh_token, jti, expires_at = create_refresh_token(subject=user.id)
 
         await self.token_repo.create_token(
-            token=refresh_token,
             jti=jti,
             user_id=user.id,
             expires_at=expires_at,
         )
-        await self.token_repo.session.commit()
 
         return Token(
             access_token=access_token,
@@ -89,45 +96,43 @@ class AuthService:
         )
 
     async def refresh_tokens(self, refresh_token: str) -> Token:
-        """Atomic refresh token rotation with reuse detection."""
-        try:
-            payload = decode_token(refresh_token)
-            if payload.get("type") != TokenType.REFRESH.value:
-                raise UnauthorizedException(MSG_REFRESH_TOKEN_REQUIRED)
-            sub_raw = payload.get("sub")
-            if sub_raw is None:
-                raise UnauthorizedException(MSG_INVALID_TOKEN)
-            user_id = int(sub_raw)
-        except (jwt.PyJWTError, ValueError, KeyError) as err:
-            raise UnauthorizedException(MSG_INVALID_TOKEN) from err
+        """Atomic refresh token rotation with reuse detection via UPDATE ... RETURNING."""
+        user_id, jti = decode_token_claim(refresh_token, TokenType.REFRESH.value)
 
-        db_token = await self.token_repo.get_by_token_for_update(refresh_token)
-        if not db_token:
+        now = datetime.now(UTC)
+        # 1. Attempt atomic revocation in 1 statement
+        revoked_user_id = await self.token_repo.atomic_revoke_token(jti=jti, now=now)
+
+        if revoked_user_id is None:
+            # Atomic revocation failed -> investigate reason (reuse, expired, or missing)
+            db_token = await self.token_repo.get_by_jti(jti)
+            if not db_token:
+                raise UnauthorizedException(MSG_INVALID_TOKEN)
+
+            if db_token.revoked:
+                # Token reuse detected! Revoke all active sessions for this user
+                await self.token_repo.revoke_all_for_user(db_token.user_id)
+                await self.token_repo.session.commit()
+                raise UnauthorizedException(MSG_TOKEN_REUSED_REVOKED)
+
+            expires_at = db_token.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
+
+            if expires_at <= now:
+                raise UnauthorizedException(MSG_TOKEN_EXPIRED)
+
             raise UnauthorizedException(MSG_INVALID_TOKEN)
 
-        # Token reuse detection
-        if db_token.revoked:
-            await self.token_repo.revoke_all_for_user(db_token.user_id)
-            await self.token_repo.session.commit()
-            raise UnauthorizedException(MSG_TOKEN_REUSED_REVOKED)
+        # 2. Token successfully revoked atomically. Fetch user and verify active status.
+        user = await self.user_repo.get_by_id(revoked_user_id)
+        if not user:
+            raise UnauthorizedException(MSG_INVALID_CREDENTIALS)
 
-        # Check expiration (ensure timezone aware comparison)
-        expires_at = db_token.expires_at
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=UTC)
+        if not user.is_active:
+            raise ForbiddenException(MSG_USER_INACTIVE)
 
-        if expires_at < datetime.now(UTC):
-            await self.token_repo.revoke_token(db_token)
-            await self.token_repo.session.commit()
-            raise UnauthorizedException(MSG_TOKEN_EXPIRED)
-
-        user = await self.user_repo.get_by_id(user_id)
-        if not user or not user.is_active:
-            raise UnauthorizedException(MSG_USER_INACTIVE)
-
-        # Atomic rotation: revoke old token and create new token pair in one transaction
-        await self.token_repo.revoke_token(db_token)
-
+        # 3. Issue new token pair
         new_access = create_access_token(
             subject=user.id,
             extra_claims={"email": user.email, "role": user.role.value},
@@ -135,12 +140,10 @@ class AuthService:
         new_refresh, new_jti, new_expires = create_refresh_token(subject=user.id)
 
         await self.token_repo.create_token(
-            token=new_refresh,
             jti=new_jti,
             user_id=user.id,
             expires_at=new_expires,
         )
-        await self.token_repo.session.commit()
 
         return Token(
             access_token=new_access,
@@ -150,7 +153,8 @@ class AuthService:
 
     async def logout(self, refresh_token: str) -> None:
         """Revoke refresh token on logout."""
-        db_token = await self.token_repo.get_by_token_for_update(refresh_token)
-        if db_token and not db_token.revoked:
-            await self.token_repo.revoke_token(db_token)
-            await self.token_repo.session.commit()
+        try:
+            _, jti = decode_token_claim(refresh_token, TokenType.REFRESH.value)
+            await self.token_repo.atomic_revoke_token(jti=jti, now=datetime.now(UTC))
+        except UnauthorizedException:
+            pass

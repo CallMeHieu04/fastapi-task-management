@@ -8,6 +8,7 @@ from app.core.security import (
 )
 from app.models.enums import UserRole
 from app.models.user import User
+from app.models.workspace import Workspace
 
 
 @pytest.mark.asyncio
@@ -17,6 +18,7 @@ async def test_register_success_defaults_to_member(client: AsyncClient):
         "email": "normal_user@example.com",
         "full_name": "Normal User",
         "password": "Password123!",
+        "role": "ADMIN",
     }
     res = await client.post("/api/v1/auth/register", json=payload)
     assert res.status_code == 201
@@ -317,3 +319,140 @@ async def test_admin_restrictions_cannot_delete_self_or_last_admin(
     member_id = reg_member.json()["id"]
     del_member = await client.delete(f"/api/v1/users/{member_id}", headers=admin1_headers)
     assert del_member.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_refresh_token(client: AsyncClient):
+    """Calling logout revokes the refresh token; subsequent /refresh returns 401."""
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": "logout_user@example.com", "full_name": "Logout User", "password": "Password123!"},
+    )
+    login_res = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "logout_user@example.com", "password": "Password123!"},
+    )
+    refresh_token = login_res.json()["refresh_token"]
+
+    logout_res = await client.post("/api/v1/auth/logout", json={"refresh_token": refresh_token})
+    assert logout_res.status_code == 200
+
+    refresh_res = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    assert refresh_res.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_access_token_used_on_refresh_api_returns_401(client: AsyncClient):
+    """Calling /refresh with an access token returns 401."""
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": "acc_on_ref@example.com", "full_name": "Acc Ref", "password": "Password123!"},
+    )
+    login_res = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "acc_on_ref@example.com", "password": "Password123!"},
+    )
+    access_token = login_res.json()["access_token"]
+    res = await client.post("/api/v1/auth/refresh", json={"refresh_token": access_token})
+    assert res.status_code == 401
+    assert "Refresh token expected" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_protected_endpoint_without_auth_header(client: AsyncClient):
+    """Protected endpoint without Authorization header returns 401 with WWW-Authenticate header."""
+    res = await client.get("/api/v1/users/me")
+    assert res.status_code == 401
+    assert res.headers.get("www-authenticate") == "Bearer"
+    assert res.json()["detail"] == "Not authenticated."
+
+
+@pytest.mark.asyncio
+async def test_change_password_with_wrong_current_password(client: AsyncClient):
+    """Changing password with incorrect current password returns 400."""
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": "wrong_pwd@example.com", "full_name": "Wrong Pwd", "password": "Password123!"},
+    )
+    login_res = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "wrong_pwd@example.com", "password": "Password123!"},
+    )
+    headers = {"Authorization": f"Bearer {login_res.json()['access_token']}"}
+    res = await client.post(
+        "/api/v1/users/me/change-password",
+        json={"current_password": "IncorrectPassword!", "new_password": "NewPassword123!"},
+        headers=headers,
+    )
+    assert res.status_code == 400
+    assert "Current password does not match" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_password_preserves_leading_trailing_spaces(client: AsyncClient):
+    """Passwords with leading/trailing spaces preserve whitespace intact."""
+    raw_pwd = "  SpacePassword123!  "
+    reg = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "spaces@example.com", "full_name": "Space User", "password": raw_pwd},
+    )
+    assert reg.status_code == 201
+
+    # Login without spaces fails
+    fail_res = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "spaces@example.com", "password": "SpacePassword123!"},
+    )
+    assert fail_res.status_code == 401
+
+    # Login with exact spaces succeeds
+    succ_res = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "spaces@example.com", "password": raw_pwd},
+    )
+    assert succ_res.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_delete_user_who_owns_workspaces(
+    client: AsyncClient,
+    db_session: AsyncSession,
+):
+    """Deleting user who owns workspaces raises 400 via IntegrityError RESTRICT."""
+    # Seed Admin
+    admin = User(
+        email="admin_del_test@example.com",
+        full_name="Admin Del Test",
+        hashed_password=hash_password("Password123!"),
+        role=UserRole.ADMIN,
+        is_active=True,
+    )
+    # Seed Member who owns a workspace
+    member = User(
+        email="owner_member@example.com",
+        full_name="Owner Member",
+        hashed_password=hash_password("Password123!"),
+        role=UserRole.MEMBER,
+        is_active=True,
+    )
+    db_session.add_all([admin, member])
+    await db_session.commit()
+    await db_session.refresh(admin)
+    await db_session.refresh(member)
+
+    ws = Workspace(name="Owner WS", owner_id=member.id)
+    db_session.add(ws)
+    await db_session.commit()
+
+    login_admin = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin_del_test@example.com", "password": "Password123!"},
+    )
+    token_admin = login_admin.json()["access_token"]
+
+    del_res = await client.delete(
+        f"/api/v1/users/{member.id}",
+        headers={"Authorization": f"Bearer {token_admin}"},
+    )
+    assert del_res.status_code == 400
+    assert "owns active workspaces" in del_res.json()["detail"]

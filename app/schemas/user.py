@@ -5,6 +5,8 @@ from pydantic import ConfigDict, EmailStr, Field, field_validator
 from app.core.constants import (
     MSG_CANNOT_BE_BLANK,
     MSG_CANNOT_BE_NULL,
+    MSG_PASSWORD_MAX_BYTES,
+    MSG_PASSWORD_MIN_LENGTH,
     PASSWORD_MAX_BYTES,
     PASSWORD_MIN_LENGTH,
     USER_NAME_MAX_LENGTH,
@@ -17,9 +19,9 @@ from app.schemas.common import BaseAppModel
 def _validate_password_length(password: str) -> str:
     """Helper to validate password length in chars and bytes (bcrypt 72-byte limit)."""
     if len(password) < PASSWORD_MIN_LENGTH:
-        raise ValueError(f"Password must be at least {PASSWORD_MIN_LENGTH} characters long.")
+        raise ValueError(MSG_PASSWORD_MIN_LENGTH.format(min_len=PASSWORD_MIN_LENGTH))
     if len(password.encode("utf-8")) > PASSWORD_MAX_BYTES:
-        raise ValueError(f"Password cannot exceed {PASSWORD_MAX_BYTES} bytes.")
+        raise ValueError(MSG_PASSWORD_MAX_BYTES.format(max_bytes=PASSWORD_MAX_BYTES))
     return password
 
 
@@ -47,10 +49,20 @@ class UserCreate(UserBase):
 
     password: str = Field(..., description="Plaintext password")
 
+    # Disable automatic whitespace stripping to preserve exact password characters
+    model_config = ConfigDict(str_strip_whitespace=False)
+
     @field_validator("password")
     @classmethod
     def validate_password_field(cls, v: str) -> str:
         return _validate_password_length(v)
+
+    @field_validator("full_name")
+    @classmethod
+    def strip_full_name(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError(MSG_CANNOT_BE_BLANK.format(field="Full name"))
+        return v.strip()
 
 
 class UserLogin(BaseAppModel):
@@ -59,11 +71,14 @@ class UserLogin(BaseAppModel):
     email: EmailStr
     password: str
 
+    # Disable automatic whitespace stripping to preserve exact password characters
+    model_config = ConfigDict(str_strip_whitespace=False)
+
     @field_validator("password")
     @classmethod
-    def validate_password_field(cls, v: str) -> str:
+    def validate_login_password_bytes(cls, v: str) -> str:
         if len(v.encode("utf-8")) > PASSWORD_MAX_BYTES:
-            raise ValueError(f"Password cannot exceed {PASSWORD_MAX_BYTES} bytes.")
+            raise ValueError(MSG_PASSWORD_MAX_BYTES.format(max_bytes=PASSWORD_MAX_BYTES))
         return v
 
 
@@ -92,6 +107,16 @@ class ChangePassword(BaseAppModel):
 
     current_password: str = Field(..., description="Existing account password")
     new_password: str = Field(..., description="New replacement password")
+
+    # Disable automatic whitespace stripping to preserve exact password characters
+    model_config = ConfigDict(str_strip_whitespace=False)
+
+    @field_validator("current_password")
+    @classmethod
+    def validate_current_password_bytes(cls, v: str) -> str:
+        if len(v.encode("utf-8")) > PASSWORD_MAX_BYTES:
+            raise ValueError(MSG_PASSWORD_MAX_BYTES.format(max_bytes=PASSWORD_MAX_BYTES))
+        return v
 
     @field_validator("new_password")
     @classmethod

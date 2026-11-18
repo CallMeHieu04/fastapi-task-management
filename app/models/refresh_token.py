@@ -11,12 +11,11 @@ if TYPE_CHECKING:
 
 
 class RefreshToken(Base):
-    """Database model for storing refresh tokens to support rotation and revocation."""
+    """Database model for tracking refresh tokens by their unique jti identifier."""
 
     __tablename__ = "refresh_tokens"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    token: Mapped[str] = mapped_column(String(512), unique=True, index=True, nullable=False)
     jti: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
@@ -30,4 +29,4 @@ class RefreshToken(Base):
     )
 
     # Relationships
-    user: Mapped["User"] = relationship("User", back_populates="refresh_tokens", lazy="selectin")
+    user: Mapped["User"] = relationship("User", back_populates="refresh_tokens")

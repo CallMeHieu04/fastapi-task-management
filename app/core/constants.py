@@ -54,6 +54,7 @@ MSG_LABEL_NOT_IN_PROJECT = "Label #{id} not found in this project."
 MSG_COMMENT_NOT_FOUND = "Comment #{id} not found."
 
 # Authentication & Security Messages
+MSG_NOT_AUTHENTICATED = "Not authenticated."
 MSG_EMAIL_EXISTS = "A user with this email address already exists."
 MSG_EMAIL_IN_USE = "Email is already in use by another account."
 MSG_INVALID_CREDENTIALS = "Incorrect email or password."
@@ -69,6 +70,7 @@ MSG_COULD_NOT_VALIDATE = "Could not validate credentials."
 MSG_PASSWORD_MISMATCH = "Current password does not match."
 MSG_CANNOT_DELETE_SELF = "You cannot delete your own account."
 MSG_CANNOT_DELETE_LAST_ADMIN = "Cannot delete the last active administrator."
+MSG_CANNOT_DELETE_WORKSPACE_OWNER = "Cannot delete user who owns active workspaces. Transfer ownership first."
 MSG_ADMIN_REQUIRED = "Administrator privileges are required for this operation."
 
 # Authorization & Workspace Messages
@@ -83,3 +85,5 @@ MSG_DELETE_OWN_COMMENT_ONLY = "You can only delete your own comments."
 # Validation error messages
 MSG_CANNOT_BE_NULL = "{field} cannot be null when provided."
 MSG_CANNOT_BE_BLANK = "{field} cannot be empty or only whitespace."
+MSG_PASSWORD_MIN_LENGTH = "Password must be at least {min_len} characters long."
+MSG_PASSWORD_MAX_BYTES = "Password cannot exceed {max_bytes} bytes."

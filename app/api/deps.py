@@ -1,6 +1,5 @@
 from typing import Annotated
 
-import jwt
 from fastapi import Depends, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,14 +8,13 @@ from app.core.constants import (
     DEFAULT_PAGE,
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
-    MSG_ACCESS_TOKEN_REQUIRED,
     MSG_ADMIN_REQUIRED,
-    MSG_COULD_NOT_VALIDATE,
     MSG_INVALID_CREDENTIALS,
+    MSG_NOT_AUTHENTICATED,
     MSG_USER_INACTIVE,
 )
 from app.core.exceptions import ForbiddenException, UnauthorizedException
-from app.core.security import decode_token
+from app.core.security import decode_token_claim
 from app.db.session import get_db
 from app.models.enums import TaskPriority, TaskStatus, TokenType, UserRole
 from app.models.user import User
@@ -27,8 +25,8 @@ from app.services.auth_service import AuthService
 from app.services.task_service import TaskService
 from app.services.user_service import UserService
 
-# Bearer token security scheme for OpenAPI
-security_scheme = HTTPBearer(auto_error=True)
+# Bearer token security scheme for OpenAPI with auto_error=False to route missing auth through custom exception handler
+security_scheme = HTTPBearer(auto_error=False)
 
 # Annotated Type Alias for DB Session
 DbSession = Annotated[AsyncSession, Depends(get_db)]
@@ -60,25 +58,18 @@ def get_task_repository(session: DbSession) -> TaskRepository:
 
 
 async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security_scheme)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security_scheme)],
     user_repo: Annotated[UserRepository, Depends(get_user_repository)],
 ) -> User:
     """Decode access token and fetch current active user.
 
     Strictly validates token claim type and catches KeyError/ValueError on subject parsing.
     """
+    if not credentials:
+        raise UnauthorizedException(MSG_NOT_AUTHENTICATED)
+
     token = credentials.credentials
-    try:
-        payload = decode_token(token)
-        token_type = payload.get("type")
-        if token_type != TokenType.ACCESS.value:
-            raise UnauthorizedException(MSG_ACCESS_TOKEN_REQUIRED)
-        sub_raw = payload.get("sub")
-        if sub_raw is None:
-            raise UnauthorizedException(MSG_COULD_NOT_VALIDATE)
-        user_id = int(sub_raw)
-    except (jwt.PyJWTError, ValueError, KeyError) as err:
-        raise UnauthorizedException(MSG_COULD_NOT_VALIDATE) from err
+    user_id, _ = decode_token_claim(token, TokenType.ACCESS.value)
 
     user = await user_repo.get_by_id(user_id)
     if not user:
