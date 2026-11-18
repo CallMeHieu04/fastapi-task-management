@@ -1,23 +1,73 @@
-from collections.abc import Generator
+from collections.abc import AsyncGenerator
 
 import pytest
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.api.deps import get_task_repository
+from app.db.base import Base
+from app.db.session import get_db
 from app.main import app
-from app.repositories.task_repository import TaskRepository
+
+TEST_DB_URL = "sqlite+aiosqlite:///./test_taskhub.db"
+
+test_engine = create_async_engine(
+    TEST_DB_URL,
+    connect_args={"check_same_thread": False},
+    future=True,
+)
+
+
+@event.listens_for(test_engine.sync_engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):  # type: ignore[no-untyped-def]
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
+TestingSessionLocal = async_sessionmaker(
+    bind=test_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autocommit=False,
+    autoflush=False,
+)
+
+
+@pytest.fixture(autouse=True)
+async def setup_test_db():
+    """Create all tables before each test and drop them after."""
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
 
 
 @pytest.fixture
-def fresh_repo() -> TaskRepository:
-    """Provides a fresh isolated repository instance for each test case."""
-    return TaskRepository()
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Provides a fresh database session for a test."""
+    async with TestingSessionLocal() as session:
+        yield session
 
 
 @pytest.fixture
-def client(fresh_repo: TaskRepository) -> Generator[TestClient, None, None]:
-    """Test client with isolated in-memory repository dependency override."""
-    app.dependency_overrides[get_task_repository] = lambda: fresh_repo
-    with TestClient(app) as test_client:
-        yield test_client
+async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+    """Provides an AsyncClient bound to the FastAPI app with test db override."""
+
+    async def override_get_db():
+        try:
+            yield db_session
+            await db_session.commit()
+        except Exception:
+            await db_session.rollback()
+            raise
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+
     app.dependency_overrides.clear()
