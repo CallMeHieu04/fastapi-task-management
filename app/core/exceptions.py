@@ -33,3 +33,10 @@ class ForbiddenException(AppException):
 
     def __init__(self, message: str) -> None:
         super().__init__(message=message, status_code=403)
+
+
+class ConflictException(AppException):
+    """Exception raised when a resource conflict occurs, such as duplicate unique constraint (409)."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message=message, status_code=409)
