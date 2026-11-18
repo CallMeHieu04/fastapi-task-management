@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.constants import PROJECT_NAME_MAX_LENGTH
 from app.db.base import Base
 from app.models.enums import ProjectStatus
 
@@ -18,8 +19,10 @@ class Project(Base):
     __tablename__ = "projects"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(PROJECT_NAME_MAX_LENGTH), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[ProjectStatus] = mapped_column(
         SAEnum(ProjectStatus, name="project_status_enum", native_enum=False),
@@ -33,10 +36,6 @@ class Project(Base):
     )
 
     # Relationships
-    workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="projects", lazy="selectin")
-    tasks: Mapped[list["Task"]] = relationship(
-        "Task", back_populates="project", cascade="all, delete-orphan", lazy="selectin"
-    )
-    labels: Mapped[list["Label"]] = relationship(
-        "Label", back_populates="project", cascade="all, delete-orphan", lazy="selectin"
-    )
+    workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="projects")
+    tasks: Mapped[list["Task"]] = relationship("Task", back_populates="project", cascade="all, delete-orphan")
+    labels: Mapped[list["Label"]] = relationship("Label", back_populates="project", cascade="all, delete-orphan")

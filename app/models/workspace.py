@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.constants import WORKSPACE_NAME_MAX_LENGTH
 from app.db.base import Base
 from app.models.enums import WorkspaceMemberRole
 
@@ -17,8 +18,8 @@ class Workspace(Base):
     __tablename__ = "workspaces"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(WORKSPACE_NAME_MAX_LENGTH), nullable=False)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
@@ -26,12 +27,12 @@ class Workspace(Base):
     )
 
     # Relationships
-    owner: Mapped["User"] = relationship("User", back_populates="owned_workspaces", lazy="selectin")
+    owner: Mapped["User"] = relationship("User", back_populates="owned_workspaces")
     members: Mapped[list["WorkspaceMember"]] = relationship(
-        "WorkspaceMember", back_populates="workspace", cascade="all, delete-orphan", lazy="selectin"
+        "WorkspaceMember", back_populates="workspace", cascade="all, delete-orphan"
     )
     projects: Mapped[list["Project"]] = relationship(
-        "Project", back_populates="workspace", cascade="all, delete-orphan", lazy="selectin"
+        "Project", back_populates="workspace", cascade="all, delete-orphan"
     )
 
 
@@ -39,7 +40,7 @@ class WorkspaceMember(Base):
     __tablename__ = "workspace_members"
 
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
     role: Mapped[WorkspaceMemberRole] = mapped_column(
         SAEnum(WorkspaceMemberRole, name="workspace_member_role_enum", native_enum=False),
         default=WorkspaceMemberRole.VIEWER,
@@ -47,5 +48,5 @@ class WorkspaceMember(Base):
     )
 
     # Relationships
-    workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="members", lazy="selectin")
-    user: Mapped["User"] = relationship("User", back_populates="workspace_memberships", lazy="selectin")
+    workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="members")
+    user: Mapped["User"] = relationship("User", back_populates="workspace_memberships")

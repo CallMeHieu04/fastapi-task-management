@@ -5,6 +5,7 @@ from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Table, Tex
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.constants import TASK_TITLE_MAX_LENGTH
 from app.db.base import Base
 from app.models.enums import TaskPriority, TaskStatus
 
@@ -19,7 +20,13 @@ task_labels = Table(
     "task_labels",
     Base.metadata,
     Column("task_id", Integer, ForeignKey("tasks.id", ondelete="CASCADE"), primary_key=True),
-    Column("label_id", Integer, ForeignKey("labels.id", ondelete="CASCADE"), primary_key=True),
+    Column(
+        "label_id",
+        Integer,
+        ForeignKey("labels.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    ),
 )
 
 
@@ -33,7 +40,7 @@ class Task(Base):
     assignee_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    title: Mapped[str] = mapped_column(String(TASK_TITLE_MAX_LENGTH), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[TaskStatus] = mapped_column(
         SAEnum(TaskStatus, name="task_status_enum", native_enum=False),
@@ -48,7 +55,9 @@ class Task(Base):
         index=True,
     )
     due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
@@ -61,17 +70,9 @@ class Task(Base):
         nullable=False,
     )
 
-    # Relationships with eager selectin loading
-    project: Mapped["Project | None"] = relationship("Project", back_populates="tasks", lazy="selectin")
-    assignee: Mapped["User | None"] = relationship(
-        "User", foreign_keys=[assignee_id], back_populates="assigned_tasks", lazy="selectin"
-    )
-    creator: Mapped["User | None"] = relationship(
-        "User", foreign_keys=[created_by], back_populates="created_tasks", lazy="selectin"
-    )
-    labels: Mapped[list["Label"]] = relationship(
-        "Label", secondary=task_labels, back_populates="tasks", lazy="selectin"
-    )
-    comments: Mapped[list["Comment"]] = relationship(
-        "Comment", back_populates="task", cascade="all, delete-orphan", lazy="selectin"
-    )
+    # Relationships
+    project: Mapped["Project | None"] = relationship("Project", back_populates="tasks")
+    assignee: Mapped["User | None"] = relationship("User", foreign_keys=[assignee_id], back_populates="assigned_tasks")
+    creator: Mapped["User | None"] = relationship("User", foreign_keys=[created_by], back_populates="created_tasks")
+    labels: Mapped[list["Label"]] = relationship("Label", secondary=task_labels, back_populates="tasks")
+    comments: Mapped[list["Comment"]] = relationship("Comment", back_populates="task", cascade="all, delete-orphan")

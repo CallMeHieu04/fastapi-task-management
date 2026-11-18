@@ -2,6 +2,7 @@ from collections.abc import AsyncGenerator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.db.base import Base
@@ -15,6 +16,14 @@ test_engine = create_async_engine(
     connect_args={"check_same_thread": False},
     future=True,
 )
+
+
+@event.listens_for(test_engine.sync_engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):  # type: ignore[no-untyped-def]
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
 
 TestingSessionLocal = async_sessionmaker(
     bind=test_engine,
@@ -48,7 +57,12 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     """Provides an AsyncClient bound to the FastAPI app with test db override."""
 
     async def override_get_db():
-        yield db_session
+        try:
+            yield db_session
+            await db_session.commit()
+        except Exception:
+            await db_session.rollback()
+            raise
 
     app.dependency_overrides[get_db] = override_get_db
 

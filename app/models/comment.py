@@ -16,7 +16,9 @@ class Comment(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
-    author_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    author_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -25,5 +27,5 @@ class Comment(Base):
     )
 
     # Relationships
-    task: Mapped["Task"] = relationship("Task", back_populates="comments", lazy="selectin")
-    author: Mapped["User"] = relationship("User", back_populates="comments", lazy="selectin")
+    task: Mapped["Task"] = relationship("Task", back_populates="comments")
+    author: Mapped["User | None"] = relationship("User", back_populates="comments")

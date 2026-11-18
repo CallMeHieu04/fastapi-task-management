@@ -11,13 +11,17 @@ class WorkspaceRepository(BaseRepository[Workspace]):
         super().__init__(Workspace, session)
 
     async def list_by_owner(self, owner_id: int) -> list[Workspace]:
-        stmt = select(Workspace).where(Workspace.owner_id == owner_id).order_by(Workspace.created_at.desc())
+        stmt = (
+            select(Workspace)
+            .where(Workspace.owner_id == owner_id)
+            .order_by(Workspace.created_at.desc(), Workspace.id.desc())
+        )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
     async def add_member(self, workspace_id: int, user_id: int, role: WorkspaceMemberRole) -> WorkspaceMember:
         member = WorkspaceMember(workspace_id=workspace_id, user_id=user_id, role=role)
         self.session.add(member)
-        await self.session.commit()
+        await self.session.flush()
         await self.session.refresh(member)
         return member

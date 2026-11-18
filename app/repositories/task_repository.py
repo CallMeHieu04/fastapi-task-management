@@ -41,8 +41,8 @@ class TaskRepository(BaseRepository[Task]):
         total_res = await self.session.execute(count_stmt)
         total = total_res.scalar_one()
 
-        # Fetch paginated slice ordered by creation time
-        stmt = query.order_by(Task.created_at.desc()).offset(skip).limit(limit)
+        # Fetch paginated slice ordered stably by creation time and primary key
+        stmt = query.order_by(Task.created_at.desc(), Task.id.desc()).offset(skip).limit(limit)
         result = await self.session.execute(stmt)
         items = list(result.scalars().all())
         return items, total

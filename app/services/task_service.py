@@ -16,16 +16,7 @@ class TaskService:
         self.repository = repository
 
     def _to_response(self, task: Task) -> TaskResponse:
-        return TaskResponse(
-            id=task.id,
-            title=task.title,
-            description=task.description,
-            status=task.status,
-            priority=task.priority,
-            due_date=task.due_date,
-            created_at=task.created_at,
-            updated_at=task.updated_at,
-        )
+        return TaskResponse.model_validate(task)
 
     async def list_tasks(
         self,
