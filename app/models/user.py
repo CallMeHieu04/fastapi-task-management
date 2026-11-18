@@ -11,6 +11,7 @@ from app.models.enums import UserRole
 
 if TYPE_CHECKING:
     from app.models.comment import Comment
+    from app.models.refresh_token import RefreshToken
     from app.models.task import Task
     from app.models.workspace import Workspace, WorkspaceMember
 
@@ -42,5 +43,10 @@ class User(Base):
     assigned_tasks: Mapped[list["Task"]] = relationship(
         "Task", foreign_keys="Task.assignee_id", back_populates="assignee"
     )
-    created_tasks: Mapped[list["Task"]] = relationship("Task", foreign_keys="Task.created_by", back_populates="creator")
+    created_tasks: Mapped[list["Task"]] = relationship(
+        "Task", foreign_keys="Task.created_by", back_populates="creator"
+    )
     comments: Mapped[list["Comment"]] = relationship("Comment", back_populates="author")
+    refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
+        "RefreshToken", back_populates="user", cascade="all, delete-orphan", lazy="raise"
+    )
