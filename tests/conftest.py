@@ -1,14 +1,15 @@
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-import app.models  # noqa: F401 - registers all SQLAlchemy tables in Base.metadata
+from app import models  # noqa: F401 - registers all SQLAlchemy tables in Base.metadata
 from app.db.base import Base
 from app.db.session import get_db
-from app.main import app
+from app.main import app as fastapi_app
 
 TEST_DB_URL = "sqlite+aiosqlite:///./test_taskhub.db"
 
@@ -20,7 +21,7 @@ test_engine = create_async_engine(
 
 
 @event.listens_for(test_engine.sync_engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):  # type: ignore[no-untyped-def]
+def set_sqlite_pragma(dbapi_connection: Any, connection_record: Any) -> None:
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
@@ -65,10 +66,36 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
             await db_session.rollback()
             raise
 
-    app.dependency_overrides[get_db] = override_get_db
+    fastapi_app.dependency_overrides[get_db] = override_get_db
 
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=fastapi_app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 
-    app.dependency_overrides.clear()
+    fastapi_app.dependency_overrides.clear()
+
+
+async def create_user_and_token(
+    client: AsyncClient,
+    email: str,
+    name: str,
+    password: str = "Password123!",
+) -> tuple[str, int]:
+    """Helper to register and login a test user, returning access token and user ID."""
+    reg_res = await client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "full_name": name, "password": password},
+    )
+    assert reg_res.status_code == 201, f"Failed to register test user: {reg_res.text}"
+
+    login_res = await client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": password},
+    )
+    assert login_res.status_code == 200, f"Failed to login test user: {login_res.text}"
+
+    token = login_res.json()["access_token"]
+    me_res = await client.get("/api/v1/users/me", headers={"Authorization": f"Bearer {token}"})
+    assert me_res.status_code == 200, f"Failed to get user profile: {me_res.text}"
+    user_id = me_res.json()["id"]
+    return token, user_id

@@ -58,6 +58,16 @@ class WorkspaceService:
 
         return True
 
+    async def get_user_role(self, workspace_id: int, user_id: int) -> WorkspaceMemberRole | None:
+        """Get the member role of a user in a workspace, or None if not a member."""
+        member = await self.workspace_repo.get_member(workspace_id, user_id)
+        return member.role if member else None
+
+    async def is_workspace_owner(self, workspace_id: int, user_id: int) -> bool:
+        """Check if user has OWNER role in the workspace."""
+        member = await self.workspace_repo.get_member(workspace_id, user_id)
+        return member is not None and member.role == WorkspaceMemberRole.OWNER
+
     def _format_response(self, workspace: Workspace) -> WorkspaceResponse:
         members_data = []
         if workspace.members:
