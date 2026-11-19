@@ -1,10 +1,11 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from app.core.constants import (
-    MSG_CANNOT_BE_BLANK,
     MSG_CANNOT_BE_NULL,
+    MSG_MEMBER_IDENTIFIER_REQUIRED,
     WORKSPACE_NAME_MAX_LENGTH,
     WORKSPACE_NAME_MIN_LENGTH,
 )
@@ -21,13 +22,6 @@ class WorkspaceBase(BaseAppModel):
         max_length=WORKSPACE_NAME_MAX_LENGTH,
         description="Workspace display name",
     )
-
-    @field_validator("name")
-    @classmethod
-    def validate_name_not_blank(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError(MSG_CANNOT_BE_BLANK.format(field="Name"))
-        return v.strip()
 
 
 class WorkspaceCreate(WorkspaceBase):
@@ -50,9 +44,7 @@ class WorkspaceUpdate(BaseAppModel):
     def validate_name(cls, v: str | None) -> str | None:
         if v is None:
             raise ValueError(MSG_CANNOT_BE_NULL.format(field="Name"))
-        if not v.strip():
-            raise ValueError(MSG_CANNOT_BE_BLANK.format(field="Name"))
-        return v.strip()
+        return v
 
 
 class WorkspaceMemberAdd(BaseAppModel):
@@ -60,7 +52,7 @@ class WorkspaceMemberAdd(BaseAppModel):
 
     user_id: int | None = Field(default=None, description="Target user identifier")
     email: EmailStr | None = Field(default=None, description="Target user email address")
-    role: WorkspaceMemberRole = Field(
+    role: Literal[WorkspaceMemberRole.EDITOR, WorkspaceMemberRole.VIEWER] = Field(
         default=WorkspaceMemberRole.VIEWER,
         description="Role within workspace (EDITOR or VIEWER)",
     )
@@ -68,7 +60,7 @@ class WorkspaceMemberAdd(BaseAppModel):
     @model_validator(mode="after")
     def validate_identifier_provided(self) -> "WorkspaceMemberAdd":
         if self.user_id is None and self.email is None:
-            raise ValueError("Either user_id or email must be provided.")
+            raise ValueError(MSG_MEMBER_IDENTIFIER_REQUIRED)
         return self
 
 

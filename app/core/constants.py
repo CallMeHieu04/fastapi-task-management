@@ -79,7 +79,9 @@ MSG_OWNER_REQUIRED = "Only workspace OWNER can perform this action."
 MSG_VIEWER_CANNOT_MODIFY = "Workspace VIEWERS are not permitted to modify this resource."
 MSG_CANNOT_REMOVE_OWNER = "Cannot remove the owner from their own workspace."
 MSG_OWNER_ALREADY_MEMBER = "The workspace owner already has full OWNER permissions."
+MSG_MEMBER_ALREADY_EXISTS = "User is already a member of this workspace."
 MSG_MEMBER_NOT_FOUND = "Member not found in workspace."
+MSG_MEMBER_IDENTIFIER_REQUIRED = "Either user_id or email must be provided."
 MSG_DELETE_OWN_COMMENT_ONLY = "You can only delete your own comments."
 
 # Validation error messages

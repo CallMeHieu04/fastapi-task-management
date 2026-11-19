@@ -1,8 +1,10 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, status
+from fastapi import APIRouter, Depends, Path, Query, status
 
 from app.api.deps import CurrentUser, get_workspace_service
+from app.core.constants import DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
+from app.schemas.common import PaginatedResponse
 from app.schemas.workspace import (
     WorkspaceCreate,
     WorkspaceMemberAdd,
@@ -39,23 +41,27 @@ async def create_workspace(
 
 @router.get(
     "",
-    response_model=list[WorkspaceResponse],
+    response_model=PaginatedResponse[WorkspaceResponse],
     status_code=status.HTTP_200_OK,
     summary="List workspaces",
-    description="Retrieve all workspaces where the current user is an owner or member.",
+    description="Retrieve paginated workspaces where the current user is an owner or member.",
 )
 @router.get(
     "/",
-    response_model=list[WorkspaceResponse],
+    response_model=PaginatedResponse[WorkspaceResponse],
     status_code=status.HTTP_200_OK,
     include_in_schema=False,
 )
 async def list_workspaces(
     current_user: CurrentUser,
     workspace_service: Annotated[WorkspaceService, Depends(get_workspace_service)],
-) -> list[WorkspaceResponse]:
-    """List all workspaces accessible to the authenticated user."""
-    return await workspace_service.list_my_workspaces(user_id=current_user.id)
+    page: Annotated[int, Query(ge=1, description="Page number starting at 1")] = DEFAULT_PAGE,
+    limit: Annotated[
+        int, Query(ge=1, le=MAX_PAGE_SIZE, description=f"Items per page (max {MAX_PAGE_SIZE})")
+    ] = DEFAULT_PAGE_SIZE,
+) -> PaginatedResponse[WorkspaceResponse]:
+    """List all workspaces accessible to the authenticated user with pagination."""
+    return await workspace_service.list_my_workspaces(user_id=current_user.id, page=page, limit=limit)
 
 
 @router.get(
@@ -65,7 +71,7 @@ async def list_workspaces(
     summary="Get workspace details",
     description="Get details and member list of a workspace (members only).",
     responses={
-        403: {"description": "Access denied (not a member)"},
+        403: {"description": "Permission denied"},
         404: {"description": "Workspace not found"},
     },
 )
@@ -129,6 +135,8 @@ async def delete_workspace(
         400: {"description": "Owner already has full permissions"},
         403: {"description": "Permission denied (OWNER role required)"},
         404: {"description": "Workspace or target user not found"},
+        409: {"description": "User is already a member"},
+        422: {"description": "Validation error (e.g. invalid role)"},
     },
 )
 async def add_workspace_member(

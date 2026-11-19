@@ -1,19 +1,24 @@
+import math
+
 from app.core.constants import (
+    DEFAULT_PAGE,
+    DEFAULT_PAGE_SIZE,
     MSG_CANNOT_REMOVE_OWNER,
+    MSG_MEMBER_ALREADY_EXISTS,
     MSG_MEMBER_NOT_FOUND,
     MSG_OWNER_ALREADY_MEMBER,
     MSG_OWNER_REQUIRED,
     MSG_USER_NOT_FOUND,
     MSG_VIEWER_CANNOT_MODIFY,
-    MSG_WORKSPACE_ACCESS_DENIED,
     MSG_WORKSPACE_NOT_FOUND,
 )
-from app.core.exceptions import BadRequestException, ForbiddenException, NotFoundException
+from app.core.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
 from app.models.enums import UserRole, WorkspaceMemberRole
 from app.models.user import User
 from app.models.workspace import Workspace
 from app.repositories.user_repository import UserRepository
 from app.repositories.workspace_repository import WorkspaceRepository
+from app.schemas.common import PaginatedResponse, PaginationMeta
 from app.schemas.workspace import (
     WorkspaceCreate,
     WorkspaceMemberAdd,
@@ -42,7 +47,8 @@ class WorkspaceService:
 
         member = await self.workspace_repo.get_member(workspace_id, current_user.id)
         if not member:
-            raise ForbiddenException(MSG_WORKSPACE_ACCESS_DENIED)
+            # Outsiders receive 404 to avoid leaking workspace existence
+            raise NotFoundException(MSG_WORKSPACE_NOT_FOUND.format(id=workspace_id))
 
         if required_role == WorkspaceMemberRole.OWNER and member.role != WorkspaceMemberRole.OWNER:
             raise ForbiddenException(MSG_OWNER_REQUIRED)
@@ -59,8 +65,8 @@ class WorkspaceService:
                 members_data.append(
                     WorkspaceMemberResponse(
                         user_id=m.user_id,
-                        email=m.user.email if hasattr(m, "user") and m.user else None,
-                        full_name=m.user.full_name if hasattr(m, "user") and m.user else None,
+                        email=m.user.email,
+                        full_name=m.user.full_name,
                         role=m.role,
                     )
                 )
@@ -77,10 +83,35 @@ class WorkspaceService:
         workspace = await self.workspace_repo.create_workspace(name=ws_in.name, owner_id=user_id)
         return self._format_response(workspace)
 
-    async def list_my_workspaces(self, user_id: int) -> list[WorkspaceResponse]:
-        """List all workspaces the user owns or belongs to."""
-        workspaces = await self.workspace_repo.list_by_user(user_id)
-        return [self._format_response(w) for w in workspaces]
+    async def list_my_workspaces(
+        self,
+        user_id: int,
+        page: int = DEFAULT_PAGE,
+        limit: int = DEFAULT_PAGE_SIZE,
+    ) -> PaginatedResponse[WorkspaceResponse]:
+        """List paginated workspaces the user owns or belongs to without eagerly loading members."""
+        workspaces, total = await self.workspace_repo.list_by_user(user_id=user_id, page=page, limit=limit)
+        total_pages = math.ceil(total / limit) if total > 0 else 0
+
+        items = [
+            WorkspaceResponse(
+                id=w.id,
+                name=w.name,
+                owner_id=w.owner_id,
+                created_at=w.created_at,
+                members=[],
+            )
+            for w in workspaces
+        ]
+        return PaginatedResponse(
+            items=items,
+            meta=PaginationMeta(
+                total=total,
+                page=page,
+                page_size=limit,
+                total_pages=total_pages,
+            ),
+        )
 
     async def get_workspace(self, workspace_id: int, current_user: User) -> WorkspaceResponse:
         """Get details and members of a workspace."""
@@ -106,6 +137,10 @@ class WorkspaceService:
 
         if ws_in.name:
             workspace = await self.workspace_repo.update(workspace, name=ws_in.name)
+            # Re-fetch workspace with relationships loaded to avoid MissingGreenlet
+            reloaded = await self.workspace_repo.get_by_id(workspace_id)
+            if reloaded:
+                workspace = reloaded
 
         return self._format_response(workspace)
 
@@ -143,6 +178,10 @@ class WorkspaceService:
 
         if target_user.id == workspace.owner_id:
             raise BadRequestException(MSG_OWNER_ALREADY_MEMBER)
+
+        existing = await self.workspace_repo.get_member(workspace_id, target_user.id)
+        if existing:
+            raise ConflictException(MSG_MEMBER_ALREADY_EXISTS)
 
         member = await self.workspace_repo.add_member(
             workspace_id=workspace_id,
