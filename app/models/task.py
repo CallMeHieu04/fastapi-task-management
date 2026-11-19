@@ -74,5 +74,10 @@ class Task(Base):
     project: Mapped["Project | None"] = relationship("Project", back_populates="tasks")
     assignee: Mapped["User | None"] = relationship("User", foreign_keys=[assignee_id], back_populates="assigned_tasks")
     creator: Mapped["User | None"] = relationship("User", foreign_keys=[created_by], back_populates="created_tasks")
-    labels: Mapped[list["Label"]] = relationship("Label", secondary=task_labels, back_populates="tasks")
+    labels: Mapped[list["Label"]] = relationship(
+        "Label",
+        secondary=task_labels,
+        back_populates="tasks",
+        lazy="selectin",
+    )
     comments: Mapped[list["Comment"]] = relationship("Comment", back_populates="task", cascade="all, delete-orphan")

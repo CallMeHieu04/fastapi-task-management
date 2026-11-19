@@ -1,3 +1,6 @@
+import logging
+import time
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -6,6 +9,8 @@ from app.api.v1.router import api_v1_router
 from app.core.config import settings
 from app.core.exceptions import AppException
 from app.core.lifespan import lifespan
+
+logger = logging.getLogger("app.access")
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -21,10 +26,28 @@ app = FastAPI(
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
     """Centralized handler mapping domain exceptions to HTTP JSON responses."""
+    headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.message},
+        headers=headers,
     )
+
+
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.perf_counter()
+    response = await call_next(request)
+    process_time = time.perf_counter() - start_time
+    response.headers["X-Process-Time"] = f"{process_time:.6f}"
+    logger.info(
+        "%s %s - %s (%.4fs)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        process_time,
+    )
+    return response
 
 
 app.add_middleware(

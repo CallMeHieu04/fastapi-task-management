@@ -1,16 +1,17 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, ConfigDict, Field, PositiveInt, field_validator
 
 from app.core.constants import (
-    MSG_CANNOT_BE_BLANK,
     MSG_CANNOT_BE_NULL,
+    MSG_DUE_DATE_PAST,
     TASK_DESC_MAX_LENGTH,
     TASK_TITLE_MAX_LENGTH,
     TASK_TITLE_MIN_LENGTH,
 )
 from app.models.task import TaskPriority, TaskStatus
 from app.schemas.common import BaseAppModel
+from app.schemas.label import LabelResponse
 
 
 class TaskBase(BaseAppModel):
@@ -21,20 +22,28 @@ class TaskBase(BaseAppModel):
         description="Task title",
     )
     description: str | None = Field(default=None, max_length=TASK_DESC_MAX_LENGTH)
-    status: TaskStatus = Field(default=TaskStatus.TODO)
     priority: TaskPriority = Field(default=TaskPriority.MEDIUM)
-    due_date: datetime | None = None
+    due_date: AwareDatetime | None = None
+    assignee_id: PositiveInt | None = None
 
-    @field_validator("title")
+    @field_validator("due_date")
     @classmethod
-    def validate_title_not_blank(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError(MSG_CANNOT_BE_BLANK.format(field="Title"))
-        return v.strip()
+    def validate_due_date_future(cls, v: AwareDatetime | None) -> AwareDatetime | None:
+        if v is not None and v < datetime.now(UTC):
+            raise ValueError(MSG_DUE_DATE_PAST)
+        return v
+
+
+class ProjectTaskCreate(TaskBase):
+    """Schema for creating a task within a specific project (URL supplies project_id)."""
+
+    pass
 
 
 class TaskCreate(TaskBase):
-    pass
+    """Schema for creating a task (project_id optionally supplied in body)."""
+
+    project_id: PositiveInt | None = None
 
 
 class TaskUpdate(BaseAppModel):
@@ -48,16 +57,15 @@ class TaskUpdate(BaseAppModel):
     description: str | None = Field(default=None, max_length=TASK_DESC_MAX_LENGTH)
     status: TaskStatus | None = None
     priority: TaskPriority | None = None
-    due_date: datetime | None = None
+    due_date: AwareDatetime | None = None
+    assignee_id: PositiveInt | None = None
 
     @field_validator("title")
     @classmethod
     def validate_title(cls, v: str | None) -> str | None:
         if v is None:
             raise ValueError(MSG_CANNOT_BE_NULL.format(field="Title"))
-        if not v.strip():
-            raise ValueError(MSG_CANNOT_BE_BLANK.format(field="Title"))
-        return v.strip()
+        return v
 
     @field_validator("status")
     @classmethod
@@ -73,10 +81,29 @@ class TaskUpdate(BaseAppModel):
             raise ValueError(MSG_CANNOT_BE_NULL.format(field="Priority"))
         return v
 
+    @field_validator("due_date")
+    @classmethod
+    def validate_due_date_future(cls, v: AwareDatetime | None) -> AwareDatetime | None:
+        if v is not None and v < datetime.now(UTC):
+            raise ValueError(MSG_DUE_DATE_PAST)
+        return v
+
 
 class TaskResponse(TaskBase):
     id: int
+    status: TaskStatus
+    project_id: int | None = None
+    assignee_id: int | None = None
+    created_by: int | None = None
+    labels: list[LabelResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("due_date", mode="before")
+    @classmethod
+    def ensure_utc_tz(cls, v: datetime | None) -> datetime | None:
+        if v is not None and isinstance(v, datetime) and v.tzinfo is None:
+            return v.replace(tzinfo=UTC)
+        return v
 
     model_config = ConfigDict(from_attributes=True)
