@@ -1,10 +1,12 @@
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import TaskPriority, TaskStatus
+from app.models.project import Project
 from app.models.task import Task
+from app.models.workspace import Workspace, WorkspaceMember
 from app.repositories.base import BaseRepository
 
 
@@ -22,12 +24,35 @@ class TaskRepository(BaseRepository[Task]):
         priority: TaskPriority | None = None,
         search: str | None = None,
         project_id: int | None = None,
+        accessible_user_id: int | None = None,
     ) -> tuple[list[Task], int]:
-        """Fetch tasks with filtering, search query, and pagination."""
+        """Fetch tasks with filtering, search query, and pagination.
+
+        If accessible_user_id is provided, restricts tasks to workspaces where the user is an owner/member.
+        """
         query = select(Task)
 
         if project_id is not None:
             query = query.where(Task.project_id == project_id)
+        elif accessible_user_id is not None:
+            accessible_workspaces = (
+                select(Workspace.id)
+                .outerjoin(WorkspaceMember, Workspace.id == WorkspaceMember.workspace_id)
+                .where(
+                    or_(
+                        Workspace.owner_id == accessible_user_id,
+                        WorkspaceMember.user_id == accessible_user_id,
+                    )
+                )
+            )
+            accessible_projects = select(Project.id).where(Project.workspace_id.in_(accessible_workspaces))
+            query = query.where(
+                or_(
+                    Task.project_id.in_(accessible_projects),
+                    Task.created_by == accessible_user_id,
+                )
+            )
+
         if status:
             query = query.where(Task.status == status)
         if priority:

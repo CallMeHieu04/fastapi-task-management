@@ -95,6 +95,15 @@ async def get_current_user(
     return user
 
 
+async def get_current_admin_user(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Ensure currently authenticated user possesses ADMIN privileges."""
+    if current_user.role != UserRole.ADMIN:
+        raise ForbiddenException(MSG_ADMIN_REQUIRED)
+    return current_user
+
+
 # Annotated Type Aliases for Current User & Admin
 CurrentUser = Annotated[User, Depends(get_current_user)]
 CurrentAdmin = Annotated[User, Depends(get_current_admin_user)]
@@ -155,6 +164,20 @@ def get_task_service(
 # ==============================================================================
 # Filter & Query Parameters
 # ==============================================================================
+
+
+class PaginationParams:
+    """Query parameter dependency for paginated listing."""
+
+    def __init__(
+        self,
+        page: Annotated[int, Query(ge=1, description="Page number starting at 1")] = DEFAULT_PAGE,
+        limit: Annotated[
+            int, Query(ge=1, le=MAX_PAGE_SIZE, description=f"Items per page (max {MAX_PAGE_SIZE})")
+        ] = DEFAULT_PAGE_SIZE,
+    ):
+        self.page = page
+        self.limit = limit
 
 
 class TaskFilterParams:

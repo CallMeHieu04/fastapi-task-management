@@ -2,10 +2,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query, status
 
-from app.api.deps import CurrentUser, get_project_service, get_workspace_service
+from app.api.deps import CurrentUser, get_workspace_service
 from app.core.constants import DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from app.schemas.common import PaginatedResponse
-from app.schemas.project import ProjectCreate, ProjectResponse
 from app.schemas.workspace import (
     WorkspaceCreate,
     WorkspaceMemberAdd,
@@ -13,7 +12,6 @@ from app.schemas.workspace import (
     WorkspaceResponse,
     WorkspaceUpdate,
 )
-from app.services.project_service import ProjectService
 from app.services.workspace_service import WorkspaceService
 
 router = APIRouter()
@@ -170,44 +168,3 @@ async def remove_workspace_member(
 ) -> None:
     """Remove a member from the workspace (OWNER only)."""
     await workspace_service.remove_member(workspace_id=id, current_user=current_user, target_user_id=user_id)
-
-
-@router.post(
-    "/{id}/projects",
-    response_model=ProjectResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Create project in workspace",
-    description="Create a project in the specified workspace (OWNER or EDITOR only).",
-    responses={
-        403: {"description": "Permission denied (OWNER or EDITOR role required)"},
-        404: {"description": "Workspace not found"},
-    },
-)
-async def create_workspace_project(
-    id: Annotated[int, Path(ge=1, description="Workspace ID")],
-    project_in: ProjectCreate,
-    current_user: CurrentUser,
-    project_service: Annotated[ProjectService, Depends(get_project_service)],
-) -> ProjectResponse:
-    """Create a new project within the workspace."""
-    return await project_service.create_project(workspace_id=id, current_user=current_user, project_in=project_in)
-
-
-@router.get(
-    "/{id}/projects",
-    response_model=list[ProjectResponse],
-    status_code=status.HTTP_200_OK,
-    summary="List workspace projects",
-    description="Retrieve all projects belonging to the workspace (Workspace members only).",
-    responses={
-        403: {"description": "Access denied (not a workspace member)"},
-        404: {"description": "Workspace not found"},
-    },
-)
-async def list_workspace_projects(
-    id: Annotated[int, Path(ge=1, description="Workspace ID")],
-    current_user: CurrentUser,
-    project_service: Annotated[ProjectService, Depends(get_project_service)],
-) -> list[ProjectResponse]:
-    """Retrieve all projects for a workspace."""
-    return await project_service.list_projects(workspace_id=id, current_user=current_user)

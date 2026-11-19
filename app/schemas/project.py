@@ -3,7 +3,6 @@ from datetime import datetime
 from pydantic import ConfigDict, Field, field_validator
 
 from app.core.constants import (
-    MSG_CANNOT_BE_BLANK,
     MSG_CANNOT_BE_NULL,
     PROJECT_DESC_MAX_LENGTH,
     PROJECT_NAME_MAX_LENGTH,
@@ -27,21 +26,10 @@ class ProjectBase(BaseAppModel):
         max_length=PROJECT_DESC_MAX_LENGTH,
         description="Project description",
     )
-    status: ProjectStatus = Field(
-        default=ProjectStatus.ACTIVE,
-        description="Project status",
-    )
-
-    @field_validator("name")
-    @classmethod
-    def validate_name_not_blank(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError(MSG_CANNOT_BE_BLANK.format(field="Name"))
-        return v.strip()
 
 
 class ProjectCreate(ProjectBase):
-    """Schema for creating a new project."""
+    """Schema for creating a new project (always defaults to ACTIVE)."""
 
     pass
 
@@ -65,9 +53,7 @@ class ProjectUpdate(BaseAppModel):
     def validate_name(cls, v: str | None) -> str | None:
         if v is None:
             raise ValueError(MSG_CANNOT_BE_NULL.format(field="Name"))
-        if not v.strip():
-            raise ValueError(MSG_CANNOT_BE_BLANK.format(field="Name"))
-        return v.strip()
+        return v
 
     @field_validator("status")
     @classmethod
@@ -82,6 +68,7 @@ class ProjectResponse(ProjectBase):
 
     id: int
     workspace_id: int
+    status: ProjectStatus
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

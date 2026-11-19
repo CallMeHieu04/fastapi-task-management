@@ -82,10 +82,13 @@ MSG_OWNER_ALREADY_MEMBER = "The workspace owner already has full OWNER permissio
 MSG_MEMBER_ALREADY_EXISTS = "User is already a member of this workspace."
 MSG_MEMBER_NOT_FOUND = "Member not found in workspace."
 MSG_MEMBER_IDENTIFIER_REQUIRED = "Either user_id or email must be provided."
+MSG_ASSIGNEE_NOT_MEMBER = "Assignee must be a member of the workspace."
+MSG_PROJECT_ARCHIVED = "Cannot modify tasks in an archived project."
 MSG_DELETE_OWN_COMMENT_ONLY = "You can only delete your own comments."
 
 # Validation error messages
 MSG_CANNOT_BE_NULL = "{field} cannot be null when provided."
 MSG_CANNOT_BE_BLANK = "{field} cannot be empty or only whitespace."
+MSG_DUE_DATE_PAST = "Due date cannot be in the past."
 MSG_PASSWORD_MIN_LENGTH = "Password must be at least {min_len} characters long."
 MSG_PASSWORD_MAX_BYTES = "Password cannot exceed {max_bytes} bytes."

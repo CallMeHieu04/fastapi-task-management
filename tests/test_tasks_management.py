@@ -64,13 +64,13 @@ async def test_workspace_project_rbac_and_crud(client: AsyncClient):
     )
     assert viewer_create.status_code == 403
 
-    # 4. Outsider attempts to create project -> 403 Forbidden
+    # 4. Outsider attempts to create project -> 404 Not Found (workspace existence hidden)
     outsider_create = await client.post(
         f"/api/v1/workspaces/{ws_id}/projects",
         json={"name": "Outsider Project"},
         headers=headers_outsider,
     )
-    assert outsider_create.status_code == 403
+    assert outsider_create.status_code == 404
 
     # 5. Editor creates project -> 201 Created
     editor_create = await client.post(
@@ -84,19 +84,21 @@ async def test_workspace_project_rbac_and_crud(client: AsyncClient):
     assert project["name"] == "Backend Refactor"
     assert project["workspace_id"] == ws_id
 
-    # 6. Viewer lists projects in workspace -> 200 OK
+    # 6. Viewer lists projects in workspace -> 200 OK (paginated envelope)
     viewer_list = await client.get(f"/api/v1/workspaces/{ws_id}/projects", headers=headers_viewer)
     assert viewer_list.status_code == 200
-    assert len(viewer_list.json()) == 1
+    page_data = viewer_list.json()
+    assert page_data["meta"]["total"] == 1
+    assert len(page_data["items"]) == 1
 
     # 7. Viewer gets project by ID -> 200 OK
     viewer_get = await client.get(f"/api/v1/projects/{proj_id}", headers=headers_viewer)
     assert viewer_get.status_code == 200
     assert viewer_get.json()["id"] == proj_id
 
-    # 8. Outsider gets project by ID -> 403 Forbidden
+    # 8. Outsider gets project by ID -> 404 Not Found (project hidden from outsiders)
     outsider_get = await client.get(f"/api/v1/projects/{proj_id}", headers=headers_outsider)
-    assert outsider_get.status_code == 403
+    assert outsider_get.status_code == 404
 
     # 9. Viewer attempts to update project -> 403 Forbidden
     viewer_update = await client.patch(
@@ -174,13 +176,13 @@ async def test_task_management_in_project_and_rbac(client: AsyncClient):
     )
     assert viewer_task_fail.status_code == 403
 
-    # 2. Outsider attempts to create task in project -> 403 Forbidden
+    # 2. Outsider attempts to create task in project -> 404 Not Found
     outsider_task_fail = await client.post(
         f"/api/v1/projects/{proj_id}/tasks",
         json={"title": "Outsider Task"},
         headers=headers_outsider,
     )
-    assert outsider_task_fail.status_code == 403
+    assert outsider_task_fail.status_code == 404
 
     # 3. Create task with invalid assignee_id -> 404 Not Found
     invalid_assignee = await client.post(
@@ -197,7 +199,6 @@ async def test_task_management_in_project_and_rbac(client: AsyncClient):
             "title": "Implement JWT rotation",
             "description": "Atomic refresh token rotation logic",
             "priority": "HIGH",
-            "status": "TODO",
             "assignee_id": viewer_id,
         },
         headers=headers_editor,
@@ -210,15 +211,16 @@ async def test_task_management_in_project_and_rbac(client: AsyncClient):
     assert task["assignee_id"] == viewer_id
     assert task["created_by"] == editor_id
     assert task["priority"] == "HIGH"
+    assert task["status"] == "TODO"
 
     # 5. Viewer can read project tasks list -> 200 OK
     tasks_list_res = await client.get(f"/api/v1/projects/{proj_id}/tasks", headers=headers_viewer)
     assert tasks_list_res.status_code == 200
     assert tasks_list_res.json()["meta"]["total"] == 1
 
-    # 6. Outsider cannot read project tasks list -> 403 Forbidden
+    # 6. Outsider cannot read project tasks list -> 404 Not Found
     outsider_list_fail = await client.get(f"/api/v1/projects/{proj_id}/tasks", headers=headers_outsider)
-    assert outsider_list_fail.status_code == 403
+    assert outsider_list_fail.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -266,7 +268,7 @@ async def test_task_update_delete_and_project_cascade(client: AsyncClient):
     task = (
         await client.post(
             f"/api/v1/projects/{proj_id}/tasks",
-            json={"title": "Cascade Target Task", "status": "TODO"},
+            json={"title": "Cascade Target Task"},
             headers=headers_editor,
         )
     ).json()
@@ -336,3 +338,121 @@ async def test_task_update_delete_and_project_cascade(client: AsyncClient):
     # Verify task was cascaded -> 404
     get_cascaded_task = await client.get(f"/api/v1/tasks/{new_task_id}", headers=headers_editor)
     assert get_cascaded_task.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_assignee_must_be_workspace_member(client: AsyncClient):
+    """Assignee must belong to the workspace of the project."""
+    token_owner, _ = await create_user_and_token(client, "assignee_owner@example.com", "Assignee Owner")
+    token_outsider, outsider_id = await create_user_and_token(client, "assignee_outsider@example.com", "Outsider")
+    owner_headers = {"Authorization": f"Bearer {token_owner}"}
+
+    ws_res = await client.post("/api/v1/workspaces", json={"name": "Assignee Check WS"}, headers=owner_headers)
+    ws_id = ws_res.json()["id"]
+
+    proj_res = await client.post(
+        f"/api/v1/workspaces/{ws_id}/projects",
+        json={"name": "Assignee Check Proj"},
+        headers=owner_headers,
+    )
+    proj_id = proj_res.json()["id"]
+
+    # Assigning to outsider -> 400 Bad Request
+    fail_res = await client.post(
+        f"/api/v1/projects/{proj_id}/tasks",
+        json={"title": "Task for Outsider", "assignee_id": outsider_id},
+        headers=owner_headers,
+    )
+    assert fail_res.status_code == 400
+    assert "Assignee must be a member of the workspace" in fail_res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_project_archived_rejects_task_modification(client: AsyncClient):
+    """When a project is ARCHIVED, tasks cannot be created, updated, or deleted."""
+    token_owner, _ = await create_user_and_token(client, "arch_owner@example.com", "Arch Owner")
+    owner_headers = {"Authorization": f"Bearer {token_owner}"}
+
+    ws = (await client.post("/api/v1/workspaces", json={"name": "Arch WS"}, headers=owner_headers)).json()
+    proj = (
+        await client.post(
+            f"/api/v1/workspaces/{ws['id']}/projects",
+            json={"name": "Arch Proj"},
+            headers=owner_headers,
+        )
+    ).json()
+    proj_id = proj["id"]
+
+    # Create task while ACTIVE -> 201
+    task = (
+        await client.post(
+            f"/api/v1/projects/{proj_id}/tasks",
+            json={"title": "Active Task"},
+            headers=owner_headers,
+        )
+    ).json()
+    task_id = task["id"]
+
+    # Archive the project -> 200
+    arch_res = await client.patch(
+        f"/api/v1/projects/{proj_id}",
+        json={"status": "ARCHIVED"},
+        headers=owner_headers,
+    )
+    assert arch_res.status_code == 200
+    assert arch_res.json()["status"] == "ARCHIVED"
+
+    # Attempt create task in ARCHIVED project -> 400
+    create_fail = await client.post(
+        f"/api/v1/projects/{proj_id}/tasks",
+        json={"title": "New Task in Archived"},
+        headers=owner_headers,
+    )
+    assert create_fail.status_code == 400
+    assert "archived" in create_fail.json()["detail"].lower()
+
+    # Attempt update task in ARCHIVED project -> 400
+    update_fail = await client.patch(
+        f"/api/v1/tasks/{task_id}",
+        json={"title": "Updated Title in Archived"},
+        headers=owner_headers,
+    )
+    assert update_fail.status_code == 400
+    assert "archived" in update_fail.json()["detail"].lower()
+
+    # Attempt delete task in ARCHIVED project -> 400
+    delete_fail = await client.delete(f"/api/v1/tasks/{task_id}", headers=owner_headers)
+    assert delete_fail.status_code == 400
+    assert "archived" in delete_fail.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_due_date_validation_rejects_past_date(client: AsyncClient):
+    """Due date cannot be in the past and requires timezone awareness."""
+    token, _ = await create_user_and_token(client, "due_date_user@example.com", "Due User")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Past date with timezone -> 422
+    past_res = await client.post(
+        "/api/v1/tasks",
+        json={"title": "Past Task", "due_date": "2020-01-01T00:00:00Z"},
+        headers=headers,
+    )
+    assert past_res.status_code == 422
+    assert "Due date cannot be in the past" in past_res.text
+
+    # Naive date without timezone -> 422 (AwareDatetime requirement)
+    naive_res = await client.post(
+        "/api/v1/tasks",
+        json={"title": "Naive Task", "due_date": "2030-01-01T00:00:00"},
+        headers=headers,
+    )
+    assert naive_res.status_code == 422
+
+    # Valid future date with UTC timezone -> 201
+    future_res = await client.post(
+        "/api/v1/tasks",
+        json={"title": "Future Task", "due_date": "2030-01-01T00:00:00Z"},
+        headers=headers,
+    )
+    assert future_res.status_code == 201
