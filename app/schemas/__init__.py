@@ -2,6 +2,13 @@ from app.schemas.common import BaseAppModel, MessageResponse, PaginatedResponse,
 from app.schemas.task import TaskCreate, TaskResponse, TaskUpdate
 from app.schemas.token import RefreshTokenRequest, Token
 from app.schemas.user import ChangePassword, UserCreate, UserLogin, UserResponse, UserUpdate
+from app.schemas.workspace import (
+    WorkspaceCreate,
+    WorkspaceMemberAdd,
+    WorkspaceMemberResponse,
+    WorkspaceResponse,
+    WorkspaceUpdate,
+)
 
 __all__ = [
     "BaseAppModel",
@@ -18,4 +25,9 @@ __all__ = [
     "UserUpdate",
     "UserResponse",
     "ChangePassword",
+    "WorkspaceCreate",
+    "WorkspaceUpdate",
+    "WorkspaceResponse",
+    "WorkspaceMemberAdd",
+    "WorkspaceMemberResponse",
 ]
