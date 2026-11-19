@@ -1,3 +1,4 @@
+import logging
 import time
 
 from fastapi import FastAPI, Request
@@ -8,6 +9,8 @@ from app.api.v1.router import api_v1_router
 from app.core.config import settings
 from app.core.exceptions import AppException
 from app.core.lifespan import lifespan
+
+logger = logging.getLogger("app.access")
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -37,6 +40,13 @@ async def add_process_time_header(request: Request, call_next):
     response = await call_next(request)
     process_time = time.perf_counter() - start_time
     response.headers["X-Process-Time"] = f"{process_time:.6f}"
+    logger.info(
+        "%s %s - %s (%.4fs)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        process_time,
+    )
     return response
 
 

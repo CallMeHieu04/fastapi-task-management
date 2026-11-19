@@ -1,0 +1,67 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: taskhub-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://taskhub_user:taskhub_password@db:5432/taskhub_db
+      - REDIS_URL=redis://redis:6379/0
+      - CACHE_ENABLED=true
+      - CACHE_TTL_SECONDS=120
+      - DEBUG=false
+      - SECRET_KEY=taskhub-docker-production-grade-secret-key-min-32-chars
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - taskhub-network
+
+  db:
+    image: postgres:16-alpine
+    container_name: taskhub-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: taskhub_user
+      POSTGRES_PASSWORD: taskhub_password
+      POSTGRES_DB: taskhub_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskhub_user -d taskhub_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - taskhub-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: taskhub-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - taskhub-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  taskhub-network:
+    driver: bridge
