@@ -59,7 +59,7 @@ class CommentUpdate(BaseAppModel):
 class CommentResponse(CommentBase):
     id: int
     task_id: int
-    author_id: int
+    author_id: int | None = None
     author: CommentAuthor | None = None
     created_at: datetime
 

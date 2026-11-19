@@ -1,16 +1,25 @@
+import math
+
 from app.core.constants import (
+    DEFAULT_PAGE,
+    DEFAULT_PAGE_SIZE,
     MSG_COMMENT_NOT_FOUND,
     MSG_DELETE_OWN_COMMENT_ONLY,
+    MSG_EDIT_OWN_COMMENT_ONLY,
+    MSG_PROJECT_ARCHIVED,
     MSG_PROJECT_NOT_FOUND,
     MSG_TASK_NOT_FOUND,
 )
-from app.core.exceptions import ForbiddenException, NotFoundException
-from app.models.enums import UserRole, WorkspaceMemberRole
+from app.core.exceptions import BadRequestException, ForbiddenException, NotFoundException
+from app.models.enums import ProjectStatus, UserRole, WorkspaceMemberRole
+from app.models.project import Project
+from app.models.task import Task
 from app.models.user import User
 from app.repositories.comment_repository import CommentRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.task_repository import TaskRepository
 from app.schemas.comment import CommentCreate, CommentResponse, CommentUpdate
+from app.schemas.common import PaginatedResponse, PaginationMeta
 from app.services.workspace_service import WorkspaceService
 
 
@@ -34,23 +43,33 @@ class CommentService:
         task_id: int,
         current_user: User,
         required_role: WorkspaceMemberRole | None = None,
-    ) -> int | None:
-        """Helper to verify workspace access for a task's parent project."""
+        for_write: bool = False,
+    ) -> tuple[Task, Project]:
+        """Helper to verify task exists and current user has workspace access to its project."""
         task = await self.task_repo.get_by_id(task_id)
         if not task:
             raise NotFoundException(MSG_TASK_NOT_FOUND.format(id=task_id))
 
-        if task.project_id is not None:
-            project = await self.project_repo.get_by_id(task.project_id)
-            if not project:
-                raise NotFoundException(MSG_PROJECT_NOT_FOUND.format(id=task.project_id))
+        if task.project_id is None:
+            raise BadRequestException("Task does not belong to a project.")
+
+        project = await self.project_repo.get_by_id(task.project_id)
+        if not project:
+            raise NotFoundException(MSG_PROJECT_NOT_FOUND.format(id=task.project_id))
+
+        try:
             await self.workspace_service.check_workspace_access(
                 workspace_id=project.workspace_id,
                 current_user=current_user,
                 required_role=required_role,
             )
-            return project.workspace_id
-        return None
+        except NotFoundException:
+            raise NotFoundException(MSG_PROJECT_NOT_FOUND.format(id=task.project_id)) from None
+
+        if for_write and project.status == ProjectStatus.ARCHIVED:
+            raise BadRequestException(MSG_PROJECT_ARCHIVED)
+
+        return task, project
 
     async def create_comment(
         self,
@@ -59,7 +78,7 @@ class CommentService:
         comment_in: CommentCreate,
     ) -> CommentResponse:
         """Add a comment to a task (Workspace members only)."""
-        await self._verify_task_workspace_access(task_id=task_id, current_user=current_user)
+        await self._verify_task_workspace_access(task_id=task_id, current_user=current_user, for_write=True)
 
         comment = await self.comment_repo.create(
             task_id=task_id,
@@ -73,12 +92,26 @@ class CommentService:
         self,
         task_id: int,
         current_user: User,
-    ) -> list[CommentResponse]:
-        """List comments for a task in chronological order (Workspace members only)."""
+        page: int = DEFAULT_PAGE,
+        limit: int = DEFAULT_PAGE_SIZE,
+    ) -> PaginatedResponse[CommentResponse]:
+        """List paginated comments for a task in chronological order (Workspace members only)."""
         await self._verify_task_workspace_access(task_id=task_id, current_user=current_user)
 
-        comments = await self.comment_repo.list_by_task(task_id=task_id)
-        return [CommentResponse.model_validate(c) for c in comments]
+        offset = (page - 1) * limit
+        comments, total = await self.comment_repo.list_by_task(task_id=task_id, offset=offset, limit=limit)
+        total_pages = math.ceil(total / limit) if total > 0 else 0
+
+        items = [CommentResponse.model_validate(c) for c in comments]
+        return PaginatedResponse[CommentResponse](
+            items=items,
+            meta=PaginationMeta(
+                page=page,
+                page_size=limit,
+                total=total,
+                total_pages=total_pages,
+            ),
+        )
 
     async def update_comment(
         self,
@@ -91,9 +124,16 @@ class CommentService:
         if not comment:
             raise NotFoundException(MSG_COMMENT_NOT_FOUND.format(id=comment_id))
 
-        # Check resource ownership
-        if comment.author_id != current_user.id and current_user.role != UserRole.ADMIN:
-            raise ForbiddenException("You can only modify your own comments.")
+        # Check membership and project status first
+        await self._verify_task_workspace_access(
+            task_id=comment.task_id,
+            current_user=current_user,
+            for_write=True,
+        )
+
+        # Strictly author only: ADMIN cannot modify other authors' comment content
+        if comment.author_id != current_user.id:
+            raise ForbiddenException(MSG_EDIT_OWN_COMMENT_ONLY)
 
         update_data = comment_in.model_dump(exclude_unset=True)
         updated = await self.comment_repo.update(comment, **update_data)
@@ -109,26 +149,20 @@ class CommentService:
         if not comment:
             raise NotFoundException(MSG_COMMENT_NOT_FOUND.format(id=comment_id))
 
-        # If user is the author or admin, permission granted
-        is_author = comment.author_id == current_user.id
-        is_admin = current_user.role == UserRole.ADMIN
+        if current_user.role != UserRole.ADMIN:
+            # Check membership in workspace first
+            _, project = await self._verify_task_workspace_access(
+                task_id=comment.task_id,
+                current_user=current_user,
+            )
 
-        is_workspace_owner = False
-        task = await self.task_repo.get_by_id(comment.task_id)
-        if task and task.project_id:
-            project = await self.project_repo.get_by_id(task.project_id)
-            if project:
-                try:
-                    await self.workspace_service.check_workspace_access(
-                        workspace_id=project.workspace_id,
-                        current_user=current_user,
-                        required_role=WorkspaceMemberRole.OWNER,
-                    )
-                    is_workspace_owner = True
-                except Exception:
-                    is_workspace_owner = False
+            is_author = comment.author_id == current_user.id
+            is_workspace_owner = await self.workspace_service.is_workspace_owner(
+                workspace_id=project.workspace_id,
+                user_id=current_user.id,
+            )
 
-        if not (is_author or is_admin or is_workspace_owner):
-            raise ForbiddenException(MSG_DELETE_OWN_COMMENT_ONLY)
+            if not (is_author or is_workspace_owner):
+                raise ForbiddenException(MSG_DELETE_OWN_COMMENT_ONLY)
 
         await self.comment_repo.delete(comment)

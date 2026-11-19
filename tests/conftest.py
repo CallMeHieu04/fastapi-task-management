@@ -72,3 +72,29 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
         yield ac
 
     app.dependency_overrides.clear()
+
+
+async def create_user_and_token(
+    client: AsyncClient,
+    email: str,
+    name: str,
+    password: str = "Password123!",
+) -> tuple[str, int]:
+    """Helper to register and login a test user, returning access token and user ID."""
+    reg_res = await client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "full_name": name, "password": password},
+    )
+    assert reg_res.status_code == 201, f"Failed to register test user: {reg_res.text}"
+
+    login_res = await client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": password},
+    )
+    assert login_res.status_code == 200, f"Failed to login test user: {login_res.text}"
+
+    token = login_res.json()["access_token"]
+    me_res = await client.get("/api/v1/users/me", headers={"Authorization": f"Bearer {token}"})
+    assert me_res.status_code == 200, f"Failed to get user profile: {me_res.text}"
+    user_id = me_res.json()["id"]
+    return token, user_id

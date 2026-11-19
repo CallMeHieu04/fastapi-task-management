@@ -1,11 +1,17 @@
+from sqlalchemy.exc import IntegrityError
+
 from app.core.constants import (
+    MSG_LABEL_ALREADY_ATTACHED,
+    MSG_LABEL_ALREADY_EXISTS,
+    MSG_LABEL_NOT_ATTACHED,
     MSG_LABEL_NOT_FOUND,
-    MSG_LABEL_NOT_IN_PROJECT,
+    MSG_PROJECT_ARCHIVED,
     MSG_PROJECT_NOT_FOUND,
     MSG_TASK_NOT_FOUND,
 )
-from app.core.exceptions import BadRequestException, NotFoundException
-from app.models.enums import WorkspaceMemberRole
+from app.core.exceptions import BadRequestException, ConflictException, NotFoundException
+from app.models.enums import ProjectStatus, WorkspaceMemberRole
+from app.models.project import Project
 from app.models.user import User
 from app.repositories.label_repository import LabelRepository
 from app.repositories.project_repository import ProjectRepository
@@ -30,6 +36,32 @@ class LabelService:
         self.task_repo = task_repo
         self.workspace_service = workspace_service
 
+    async def _get_project_with_access(
+        self,
+        project_id: int,
+        current_user: User,
+        required_role: WorkspaceMemberRole | None = None,
+        for_write: bool = False,
+    ) -> Project:
+        """Fetch project ensuring current user has access, returning 404 for non-members to prevent ID probing."""
+        project = await self.project_repo.get_by_id(project_id)
+        if not project:
+            raise NotFoundException(MSG_PROJECT_NOT_FOUND.format(id=project_id))
+
+        try:
+            await self.workspace_service.check_workspace_access(
+                workspace_id=project.workspace_id,
+                current_user=current_user,
+                required_role=required_role,
+            )
+        except NotFoundException:
+            raise NotFoundException(MSG_PROJECT_NOT_FOUND.format(id=project_id)) from None
+
+        if for_write and project.status == ProjectStatus.ARCHIVED:
+            raise BadRequestException(MSG_PROJECT_ARCHIVED)
+
+        return project
+
     async def create_label(
         self,
         project_id: int,
@@ -37,21 +69,27 @@ class LabelService:
         label_in: LabelCreate,
     ) -> LabelResponse:
         """Create a label in a project (OWNER or EDITOR only)."""
-        project = await self.project_repo.get_by_id(project_id)
-        if not project:
-            raise NotFoundException(MSG_PROJECT_NOT_FOUND.format(id=project_id))
-
-        await self.workspace_service.check_workspace_access(
-            workspace_id=project.workspace_id,
+        await self._get_project_with_access(
+            project_id=project_id,
             current_user=current_user,
             required_role=WorkspaceMemberRole.EDITOR,
+            for_write=True,
         )
 
-        label = await self.label_repo.create(
-            project_id=project_id,
-            name=label_in.name,
-            color=label_in.color,
-        )
+        existing = await self.label_repo.get_by_project_and_name(project_id=project_id, name=label_in.name)
+        if existing:
+            raise ConflictException(MSG_LABEL_ALREADY_EXISTS.format(name=label_in.name))
+
+        try:
+            label = await self.label_repo.create(
+                project_id=project_id,
+                name=label_in.name,
+                color=label_in.color,
+            )
+        except IntegrityError:
+            await self.label_repo.session.rollback()
+            raise ConflictException(MSG_LABEL_ALREADY_EXISTS.format(name=label_in.name)) from None
+
         return LabelResponse.model_validate(label)
 
     async def list_labels(
@@ -60,12 +98,8 @@ class LabelService:
         current_user: User,
     ) -> list[LabelResponse]:
         """List all labels in a project (Workspace members only)."""
-        project = await self.project_repo.get_by_id(project_id)
-        if not project:
-            raise NotFoundException(MSG_PROJECT_NOT_FOUND.format(id=project_id))
-
-        await self.workspace_service.check_workspace_access(
-            workspace_id=project.workspace_id,
+        await self._get_project_with_access(
+            project_id=project_id,
             current_user=current_user,
         )
 
@@ -83,18 +117,28 @@ class LabelService:
         if not label:
             raise NotFoundException(MSG_LABEL_NOT_FOUND.format(id=label_id))
 
-        project = await self.project_repo.get_by_id(label.project_id)
-        if not project:
-            raise NotFoundException(MSG_PROJECT_NOT_FOUND.format(id=label.project_id))
-
-        await self.workspace_service.check_workspace_access(
-            workspace_id=project.workspace_id,
+        await self._get_project_with_access(
+            project_id=label.project_id,
             current_user=current_user,
             required_role=WorkspaceMemberRole.EDITOR,
+            for_write=True,
         )
 
+        if label_in.name is not None and label_in.name != label.name:
+            existing = await self.label_repo.get_by_project_and_name(
+                project_id=label.project_id,
+                name=label_in.name,
+            )
+            if existing:
+                raise ConflictException(MSG_LABEL_ALREADY_EXISTS.format(name=label_in.name))
+
         update_data = label_in.model_dump(exclude_unset=True)
-        updated = await self.label_repo.update(label, **update_data)
+        try:
+            updated = await self.label_repo.update(label, **update_data)
+        except IntegrityError:
+            await self.label_repo.session.rollback()
+            raise ConflictException(MSG_LABEL_ALREADY_EXISTS.format(name=label_in.name or label.name)) from None
+
         return LabelResponse.model_validate(updated)
 
     async def delete_label(
@@ -107,14 +151,11 @@ class LabelService:
         if not label:
             raise NotFoundException(MSG_LABEL_NOT_FOUND.format(id=label_id))
 
-        project = await self.project_repo.get_by_id(label.project_id)
-        if not project:
-            raise NotFoundException(MSG_PROJECT_NOT_FOUND.format(id=label.project_id))
-
-        await self.workspace_service.check_workspace_access(
-            workspace_id=project.workspace_id,
+        await self._get_project_with_access(
+            project_id=label.project_id,
             current_user=current_user,
             required_role=WorkspaceMemberRole.EDITOR,
+            for_write=True,
         )
         await self.label_repo.delete(label)
 
@@ -132,14 +173,11 @@ class LabelService:
         if task.project_id is None:
             raise BadRequestException("Cannot attach label to a task without a project.")
 
-        project = await self.project_repo.get_by_id(task.project_id)
-        if not project:
-            raise NotFoundException(MSG_PROJECT_NOT_FOUND.format(id=task.project_id))
-
-        await self.workspace_service.check_workspace_access(
-            workspace_id=project.workspace_id,
+        await self._get_project_with_access(
+            project_id=task.project_id,
             current_user=current_user,
             required_role=WorkspaceMemberRole.EDITOR,
+            for_write=True,
         )
 
         label = await self.label_repo.get_by_id(label_id)
@@ -147,9 +185,17 @@ class LabelService:
             raise NotFoundException(MSG_LABEL_NOT_FOUND.format(id=label_id))
 
         if label.project_id != task.project_id:
-            raise BadRequestException(MSG_LABEL_NOT_IN_PROJECT.format(id=label_id))
+            raise NotFoundException(MSG_LABEL_NOT_FOUND.format(id=label_id))
 
-        updated_task = await self.label_repo.attach_label_to_task(task=task, label=label)
+        if any(lbl.id == label_id for lbl in task.labels):
+            raise ConflictException(MSG_LABEL_ALREADY_ATTACHED.format(id=label_id))
+
+        try:
+            updated_task = await self.label_repo.attach_label_to_task(task=task, label=label)
+        except IntegrityError:
+            await self.label_repo.session.rollback()
+            raise ConflictException(MSG_LABEL_ALREADY_ATTACHED.format(id=label_id)) from None
+
         return TaskResponse.model_validate(updated_task)
 
     async def detach_label_from_task(
@@ -166,19 +212,22 @@ class LabelService:
         if task.project_id is None:
             raise BadRequestException("Cannot detach label from a task without a project.")
 
-        project = await self.project_repo.get_by_id(task.project_id)
-        if not project:
-            raise NotFoundException(MSG_PROJECT_NOT_FOUND.format(id=task.project_id))
-
-        await self.workspace_service.check_workspace_access(
-            workspace_id=project.workspace_id,
+        await self._get_project_with_access(
+            project_id=task.project_id,
             current_user=current_user,
             required_role=WorkspaceMemberRole.EDITOR,
+            for_write=True,
         )
 
         label = await self.label_repo.get_by_id(label_id)
         if not label:
             raise NotFoundException(MSG_LABEL_NOT_FOUND.format(id=label_id))
+
+        if label.project_id != task.project_id:
+            raise NotFoundException(MSG_LABEL_NOT_FOUND.format(id=label_id))
+
+        if not any(lbl.id == label_id for lbl in task.labels):
+            raise NotFoundException(MSG_LABEL_NOT_ATTACHED.format(id=label_id))
 
         updated_task = await self.label_repo.detach_label_from_task(task=task, label=label)
         return TaskResponse.model_validate(updated_task)
