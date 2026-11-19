@@ -55,13 +55,14 @@ async def create_workspace(
 async def list_workspaces(
     current_user: CurrentUser,
     workspace_service: Annotated[WorkspaceService, Depends(get_workspace_service)],
+    search: Annotated[str | None, Query(max_length=50, description="Search by workspace name")] = None,
     page: Annotated[int, Query(ge=1, description="Page number starting at 1")] = DEFAULT_PAGE,
     limit: Annotated[
         int, Query(ge=1, le=MAX_PAGE_SIZE, description=f"Items per page (max {MAX_PAGE_SIZE})")
     ] = DEFAULT_PAGE_SIZE,
 ) -> PaginatedResponse[WorkspaceResponse]:
-    """List all workspaces accessible to the authenticated user with pagination."""
-    return await workspace_service.list_my_workspaces(user_id=current_user.id, page=page, limit=limit)
+    """List all workspaces accessible to the authenticated user with search and pagination."""
+    return await workspace_service.list_my_workspaces(user_id=current_user.id, page=page, limit=limit, search=search)
 
 
 @router.get(

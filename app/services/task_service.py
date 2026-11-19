@@ -1,6 +1,7 @@
 import math
 from typing import TYPE_CHECKING
 
+from app.core.cache import CacheService
 from app.core.constants import (
     MSG_ASSIGNEE_NOT_MEMBER,
     MSG_PROJECT_ARCHIVED,
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
 
 
 class TaskService:
-    """Business logic layer for Task operations, receiving repositories and WorkspaceService via DI."""
+    """Business logic layer for Task operations, receiving repositories, WorkspaceService, and CacheService via DI."""
 
     def __init__(
         self,
@@ -33,11 +34,13 @@ class TaskService:
         project_repo: ProjectRepository,
         workspace_service: WorkspaceService,
         user_repo: UserRepository,
+        cache_service: CacheService | None = None,
     ) -> None:
         self.repository = repository
         self.project_repo = project_repo
         self.workspace_service = workspace_service
         self.user_repo = user_repo
+        self.cache = cache_service
 
     def _to_response(self, task: Task) -> TaskResponse:
         return TaskResponse.model_validate(task)
@@ -87,7 +90,7 @@ class TaskService:
         filters: "TaskFilterParams",
         current_user: User,
     ) -> PaginatedResponse[TaskResponse]:
-        """Fetch paginated tasks with filtering.
+        """Fetch paginated tasks with filtering, search, sorting, and caching.
 
         Out-of-workspace projects return 404; global list filters to user's workspaces.
         """
@@ -97,6 +100,16 @@ class TaskService:
         else:
             accessible_user_id = current_user.id if current_user.role != UserRole.ADMIN else None
 
+        cache_key = (
+            f"tasks:u{current_user.id}:pid{filters.project_id}:p{filters.page}:l{filters.limit}:"
+            f"s{filters.status}:pr{filters.priority}:a{filters.assignee_id}:lbl{filters.label_id}:"
+            f"q{filters.search}:sb{filters.sort_by}:o{filters.order}"
+        )
+        if self.cache:
+            cached = await self.cache.get_json(cache_key)
+            if cached:
+                return PaginatedResponse[TaskResponse].model_validate(cached)
+
         skip = (filters.page - 1) * filters.limit
         tasks, total = await self.repository.list_tasks(
             skip=skip,
@@ -105,11 +118,17 @@ class TaskService:
             priority=filters.priority,
             search=filters.search,
             project_id=filters.project_id,
+            assignee_id=filters.assignee_id,
+            label_id=filters.label_id,
+            due_date_from=filters.due_date_from,
+            due_date_to=filters.due_date_to,
+            sort_by=filters.sort_by,
+            order=filters.order,
             accessible_user_id=accessible_user_id,
         )
         total_pages = math.ceil(total / filters.limit) if total > 0 else 0
 
-        return PaginatedResponse(
+        response = PaginatedResponse(
             items=[self._to_response(t) for t in tasks],
             meta=PaginationMeta(
                 total=total,
@@ -118,9 +137,20 @@ class TaskService:
                 total_pages=total_pages,
             ),
         )
+        if self.cache:
+            await self.cache.set_json(cache_key, response.model_dump())
+        return response
 
     async def get_task(self, task_id: int, current_user: User) -> TaskResponse:
-        """Get task by ID (verifying project/workspace access)."""
+        """Get task by ID (verifying project/workspace access with caching)."""
+        cache_key = f"tasks:detail:{task_id}"
+        if self.cache:
+            cached = await self.cache.get_json(cache_key)
+            if cached:
+                if cached.get("project_id") is not None:
+                    await self._get_project_with_access(cached["project_id"], current_user)
+                return TaskResponse.model_validate(cached)
+
         task = await self.repository.get_by_id(task_id)
         if not task:
             raise NotFoundException(MSG_TASK_NOT_FOUND.format(id=task_id))
@@ -128,7 +158,10 @@ class TaskService:
         if task.project_id is not None:
             await self._get_project_with_access(task.project_id, current_user)
 
-        return self._to_response(task)
+        res = self._to_response(task)
+        if self.cache:
+            await self.cache.set_json(cache_key, res.model_dump())
+        return res
 
     async def create_task(self, task_in: TaskCreate, current_user: User) -> TaskResponse:
         """Create a new task with validated project membership and assignee."""
@@ -154,6 +187,10 @@ class TaskService:
             assignee_id=task_in.assignee_id,
             created_by=current_user.id,
         )
+        if self.cache:
+            await self.cache.delete_pattern("tasks:u*")
+            if task_in.project_id:
+                await self.cache.delete_pattern(f"tasks:*pid{task_in.project_id}:*")
         return self._to_response(task)
 
     async def create_project_task(
@@ -181,6 +218,9 @@ class TaskService:
             assignee_id=task_in.assignee_id,
             created_by=current_user.id,
         )
+        if self.cache:
+            await self.cache.delete_pattern("tasks:u*")
+            await self.cache.delete_pattern(f"tasks:*pid{project_id}:*")
         return self._to_response(task)
 
     async def list_project_tasks(
@@ -219,6 +259,11 @@ class TaskService:
 
         update_data = task_in.model_dump(exclude_unset=True)
         updated_task = await self.repository.update(task, **update_data)
+        if self.cache:
+            await self.cache.delete(f"tasks:detail:{task_id}")
+            await self.cache.delete_pattern("tasks:u*")
+            if task.project_id:
+                await self.cache.delete_pattern(f"tasks:*pid{task.project_id}:*")
         return self._to_response(updated_task)
 
     async def delete_task(self, task_id: int, current_user: User) -> None:
@@ -235,4 +280,10 @@ class TaskService:
                 for_write=True,
             )
 
+        project_id = task.project_id
         await self.repository.delete(task)
+        if self.cache:
+            await self.cache.delete(f"tasks:detail:{task_id}")
+            await self.cache.delete_pattern("tasks:u*")
+            if project_id:
+                await self.cache.delete_pattern(f"tasks:*pid{project_id}:*")

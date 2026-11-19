@@ -2,6 +2,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import DEFAULT_PAGE, DEFAULT_PAGE_SIZE
+from app.models.enums import ProjectStatus
 from app.models.project import Project
 from app.repositories.base import BaseRepository
 
@@ -15,18 +16,34 @@ class ProjectRepository(BaseRepository[Project]):
         workspace_id: int,
         page: int = DEFAULT_PAGE,
         limit: int = DEFAULT_PAGE_SIZE,
+        search: str | None = None,
+        status: ProjectStatus | None = None,
+        sort_by: str = "created_at",
+        order: str = "desc",
     ) -> tuple[list[Project], int]:
-        """Fetch paginated projects within a workspace with stable tie-breaker sorting."""
-        count_stmt = select(func.count(Project.id)).where(Project.workspace_id == workspace_id)
+        """Fetch paginated projects within a workspace with search, filtering, and stable sorting."""
+        query = select(Project).where(Project.workspace_id == workspace_id)
+
+        if status is not None:
+            query = query.where(Project.status == status)
+        if search:
+            pattern = f"%{search.lower()}%"
+            query = query.where(
+                (func.lower(Project.name).like(pattern)) | (func.lower(Project.description).like(pattern))
+            )
+
+        count_stmt = select(func.count()).select_from(query.subquery())
         total_res = await self.session.execute(count_stmt)
         total = total_res.scalar_one()
 
-        stmt = (
-            select(Project)
-            .where(Project.workspace_id == workspace_id)
-            .order_by(Project.created_at.desc(), Project.id.desc())
-            .offset((page - 1) * limit)
-            .limit(limit)
-        )
+        sort_column_map = {
+            "created_at": Project.created_at,
+            "name": Project.name,
+            "status": Project.status,
+        }
+        col = sort_column_map.get(sort_by, Project.created_at)
+        sort_expr = col.asc() if order.lower() == "asc" else col.desc()
+
+        stmt = query.order_by(sort_expr, Project.id.desc()).offset((page - 1) * limit).limit(limit)
         result = await self.session.execute(stmt)
         return list(result.scalars().all()), total

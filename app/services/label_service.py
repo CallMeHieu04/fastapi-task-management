@@ -1,5 +1,6 @@
 from sqlalchemy.exc import IntegrityError
 
+from app.core.cache import CacheService
 from app.core.constants import (
     MSG_LABEL_ALREADY_ATTACHED,
     MSG_LABEL_ALREADY_EXISTS,
@@ -30,11 +31,13 @@ class LabelService:
         project_repo: ProjectRepository,
         task_repo: TaskRepository,
         workspace_service: WorkspaceService,
+        cache_service: CacheService | None = None,
     ) -> None:
         self.label_repo = label_repo
         self.project_repo = project_repo
         self.task_repo = task_repo
         self.workspace_service = workspace_service
+        self.cache = cache_service
 
     async def _get_project_with_access(
         self,
@@ -196,6 +199,9 @@ class LabelService:
             await self.label_repo.session.rollback()
             raise ConflictException(MSG_LABEL_ALREADY_ATTACHED.format(id=label_id)) from None
 
+        if self.cache:
+            await self.cache.delete(f"tasks:detail:{task_id}")
+            await self.cache.delete_pattern("tasks:*")
         return TaskResponse.model_validate(updated_task)
 
     async def detach_label_from_task(
@@ -230,4 +236,7 @@ class LabelService:
             raise NotFoundException(MSG_LABEL_NOT_ATTACHED.format(id=label_id))
 
         updated_task = await self.label_repo.detach_label_from_task(task=task, label=label)
+        if self.cache:
+            await self.cache.delete(f"tasks:detail:{task_id}")
+            await self.cache.delete_pattern("tasks:*")
         return TaskResponse.model_validate(updated_task)

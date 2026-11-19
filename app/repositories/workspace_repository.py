@@ -1,6 +1,6 @@
 from typing import Any
 
-from sqlalchemy import distinct, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -63,22 +63,10 @@ class WorkspaceRepository(BaseRepository[Workspace]):
         user_id: int,
         page: int = DEFAULT_PAGE,
         limit: int = DEFAULT_PAGE_SIZE,
+        search: str | None = None,
     ) -> tuple[list[Workspace], int]:
-        """Fetch paginated workspaces where the user is an owner or member."""
-        count_stmt = (
-            select(func.count(distinct(Workspace.id)))
-            .outerjoin(WorkspaceMember, Workspace.id == WorkspaceMember.workspace_id)
-            .where(
-                or_(
-                    Workspace.owner_id == user_id,
-                    WorkspaceMember.user_id == user_id,
-                )
-            )
-        )
-        total_res = await self.session.execute(count_stmt)
-        total = total_res.scalar() or 0
-
-        stmt = (
+        """Fetch paginated workspaces where the user is an owner or member with optional name search."""
+        base_query = (
             select(Workspace)
             .outerjoin(WorkspaceMember, Workspace.id == WorkspaceMember.workspace_id)
             .where(
@@ -87,7 +75,17 @@ class WorkspaceRepository(BaseRepository[Workspace]):
                     WorkspaceMember.user_id == user_id,
                 )
             )
-            .distinct()
+        )
+        if search:
+            pattern = f"%{search.lower()}%"
+            base_query = base_query.where(func.lower(Workspace.name).like(pattern))
+
+        count_stmt = select(func.count()).select_from(base_query.distinct().subquery())
+        total_res = await self.session.execute(count_stmt)
+        total = total_res.scalar_one()
+
+        stmt = (
+            base_query.distinct()
             .order_by(Workspace.created_at.desc(), Workspace.id.desc())
             .offset((page - 1) * limit)
             .limit(limit)

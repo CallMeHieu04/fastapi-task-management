@@ -1,5 +1,6 @@
 import math
 
+from app.core.cache import CacheService
 from app.core.constants import (
     DEFAULT_PAGE,
     DEFAULT_PAGE_SIZE,
@@ -31,9 +32,15 @@ from app.schemas.workspace import (
 class WorkspaceService:
     """Service encapsulating Workspace domain logic, membership, and RBAC authorization."""
 
-    def __init__(self, workspace_repo: WorkspaceRepository, user_repo: UserRepository) -> None:
+    def __init__(
+        self,
+        workspace_repo: WorkspaceRepository,
+        user_repo: UserRepository,
+        cache_service: CacheService | None = None,
+    ) -> None:
         self.workspace_repo = workspace_repo
         self.user_repo = user_repo
+        self.cache = cache_service
 
     async def check_workspace_access(
         self,
@@ -91,6 +98,8 @@ class WorkspaceService:
     async def create_workspace(self, user_id: int, ws_in: WorkspaceCreate) -> WorkspaceResponse:
         """Create a new workspace owned by the current user."""
         workspace = await self.workspace_repo.create_workspace(name=ws_in.name, owner_id=user_id)
+        if self.cache:
+            await self.cache.delete_pattern("workspaces:user:*")
         return self._format_response(workspace)
 
     async def list_my_workspaces(
@@ -98,9 +107,21 @@ class WorkspaceService:
         user_id: int,
         page: int = DEFAULT_PAGE,
         limit: int = DEFAULT_PAGE_SIZE,
+        search: str | None = None,
     ) -> PaginatedResponse[WorkspaceResponse]:
-        """List paginated workspaces the user owns or belongs to without eagerly loading members."""
-        workspaces, total = await self.workspace_repo.list_by_user(user_id=user_id, page=page, limit=limit)
+        """List paginated workspaces the user owns or belongs to with optional name search."""
+        cache_key = f"workspaces:user:{user_id}:p{page}:l{limit}:q{search}"
+        if self.cache:
+            cached = await self.cache.get_json(cache_key)
+            if cached:
+                return PaginatedResponse[WorkspaceResponse].model_validate(cached)
+
+        workspaces, total = await self.workspace_repo.list_by_user(
+            user_id=user_id,
+            page=page,
+            limit=limit,
+            search=search,
+        )
         total_pages = math.ceil(total / limit) if total > 0 else 0
 
         items = [
@@ -113,7 +134,7 @@ class WorkspaceService:
             )
             for w in workspaces
         ]
-        return PaginatedResponse(
+        result = PaginatedResponse(
             items=items,
             meta=PaginationMeta(
                 total=total,
@@ -122,15 +143,28 @@ class WorkspaceService:
                 total_pages=total_pages,
             ),
         )
+        if self.cache:
+            await self.cache.set_json(cache_key, result.model_dump())
+        return result
 
     async def get_workspace(self, workspace_id: int, current_user: User) -> WorkspaceResponse:
         """Get details and members of a workspace."""
+        await self.check_workspace_access(workspace_id, current_user)
+
+        cache_key = f"workspaces:detail:{workspace_id}"
+        if self.cache:
+            cached = await self.cache.get_json(cache_key)
+            if cached:
+                return WorkspaceResponse.model_validate(cached)
+
         workspace = await self.workspace_repo.get_by_id(workspace_id)
         if not workspace:
             raise NotFoundException(MSG_WORKSPACE_NOT_FOUND.format(id=workspace_id))
 
-        await self.check_workspace_access(workspace_id, current_user)
-        return self._format_response(workspace)
+        res = self._format_response(workspace)
+        if self.cache:
+            await self.cache.set_json(cache_key, res.model_dump())
+        return res
 
     async def update_workspace(
         self,
@@ -139,20 +173,18 @@ class WorkspaceService:
         ws_in: WorkspaceUpdate,
     ) -> WorkspaceResponse:
         """Update workspace name (OWNER only)."""
+        await self.check_workspace_access(workspace_id, current_user, required_role=WorkspaceMemberRole.OWNER)
+
         workspace = await self.workspace_repo.get_by_id(workspace_id)
         if not workspace:
             raise NotFoundException(MSG_WORKSPACE_NOT_FOUND.format(id=workspace_id))
 
-        await self.check_workspace_access(workspace_id, current_user, required_role=WorkspaceMemberRole.OWNER)
-
-        if ws_in.name:
-            workspace = await self.workspace_repo.update(workspace, name=ws_in.name)
-            # Re-fetch workspace with relationships loaded to avoid MissingGreenlet
-            reloaded = await self.workspace_repo.get_by_id(workspace_id)
-            if reloaded:
-                workspace = reloaded
-
-        return self._format_response(workspace)
+        update_data = ws_in.model_dump(exclude_unset=True)
+        updated = await self.workspace_repo.update(workspace, **update_data)
+        if self.cache:
+            await self.cache.delete(f"workspaces:detail:{workspace_id}")
+            await self.cache.delete_pattern("workspaces:user:*")
+        return self._format_response(updated)
 
     async def delete_workspace(self, workspace_id: int, current_user: User) -> None:
         """Permanently delete workspace (OWNER only)."""
@@ -162,6 +194,9 @@ class WorkspaceService:
 
         await self.check_workspace_access(workspace_id, current_user, required_role=WorkspaceMemberRole.OWNER)
         await self.workspace_repo.delete(workspace)
+        if self.cache:
+            await self.cache.delete(f"workspaces:detail:{workspace_id}")
+            await self.cache.delete_pattern("workspaces:user:*")
 
     async def add_member(
         self,
@@ -198,6 +233,9 @@ class WorkspaceService:
             user_id=target_user.id,
             role=member_in.role,
         )
+        if self.cache:
+            await self.cache.delete(f"workspaces:detail:{workspace_id}")
+            await self.cache.delete_pattern("workspaces:user:*")
         return WorkspaceMemberResponse(
             user_id=target_user.id,
             email=target_user.email,
@@ -224,3 +262,6 @@ class WorkspaceService:
         removed = await self.workspace_repo.remove_member(workspace_id, target_user_id)
         if not removed:
             raise NotFoundException(MSG_MEMBER_NOT_FOUND)
+        if self.cache:
+            await self.cache.delete(f"workspaces:detail:{workspace_id}")
+            await self.cache.delete_pattern("workspaces:user:*")

@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, status
 
-from app.api.deps import CurrentUser, PaginationParams, get_project_service
+from app.api.deps import CurrentUser, ProjectFilterParams, get_project_service
 from app.schemas.common import PaginatedResponse
 from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
 from app.services.project_service import ProjectService
@@ -44,16 +44,20 @@ async def create_workspace_project(
 )
 async def list_workspace_projects(
     id: Annotated[int, Path(ge=1, description="Workspace ID")],
-    pagination: Annotated[PaginationParams, Depends()],
+    filters: Annotated[ProjectFilterParams, Depends()],
     current_user: CurrentUser,
     project_service: Annotated[ProjectService, Depends(get_project_service)],
 ) -> PaginatedResponse[ProjectResponse]:
-    """Retrieve paginated projects for a workspace."""
+    """Retrieve paginated projects for a workspace with searching and filtering."""
     return await project_service.list_projects(
         workspace_id=id,
         current_user=current_user,
-        page=pagination.page,
-        limit=pagination.limit,
+        page=filters.page,
+        limit=filters.limit,
+        search=filters.search,
+        status=filters.status,
+        sort_by=filters.sort_by,
+        order=filters.order,
     )
 
 

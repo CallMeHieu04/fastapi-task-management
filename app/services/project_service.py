@@ -1,5 +1,6 @@
 import math
 
+from app.core.cache import CacheService
 from app.core.constants import DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MSG_PROJECT_NOT_FOUND
 from app.core.exceptions import NotFoundException
 from app.models.enums import ProjectStatus, WorkspaceMemberRole
@@ -18,9 +19,11 @@ class ProjectService:
         self,
         project_repo: ProjectRepository,
         workspace_service: WorkspaceService,
+        cache_service: CacheService | None = None,
     ) -> None:
         self.project_repo = project_repo
         self.workspace_service = workspace_service
+        self.cache = cache_service
 
     async def get_project_with_access(
         self,
@@ -62,6 +65,8 @@ class ProjectService:
             description=project_in.description,
             status=ProjectStatus.ACTIVE,
         )
+        if self.cache:
+            await self.cache.delete_pattern(f"projects:workspace:{workspace_id}:*")
         return ProjectResponse.model_validate(project)
 
     async def list_projects(
@@ -70,19 +75,34 @@ class ProjectService:
         current_user: User,
         page: int = DEFAULT_PAGE,
         limit: int = DEFAULT_PAGE_SIZE,
+        search: str | None = None,
+        status: ProjectStatus | None = None,
+        sort_by: str = "created_at",
+        order: str = "desc",
     ) -> PaginatedResponse[ProjectResponse]:
-        """List paginated projects in the workspace (Workspace members only)."""
+        """List paginated projects in the workspace with filtering, search, and caching."""
         await self.workspace_service.check_workspace_access(
             workspace_id=workspace_id,
             current_user=current_user,
         )
+
+        cache_key = f"projects:workspace:{workspace_id}:p{page}:l{limit}:q{search}:s{status}:sb{sort_by}:o{order}"
+        if self.cache:
+            cached = await self.cache.get_json(cache_key)
+            if cached:
+                return PaginatedResponse[ProjectResponse].model_validate(cached)
+
         projects, total = await self.project_repo.list_by_workspace(
             workspace_id=workspace_id,
             page=page,
             limit=limit,
+            search=search,
+            status=status,
+            sort_by=sort_by,
+            order=order,
         )
         total_pages = math.ceil(total / limit) if total > 0 else 0
-        return PaginatedResponse(
+        response = PaginatedResponse(
             items=[ProjectResponse.model_validate(p) for p in projects],
             meta=PaginationMeta(
                 total=total,
@@ -91,6 +111,9 @@ class ProjectService:
                 total_pages=total_pages,
             ),
         )
+        if self.cache:
+            await self.cache.set_json(cache_key, response.model_dump())
+        return response
 
     async def get_project(
         self,
@@ -98,8 +121,22 @@ class ProjectService:
         current_user: User,
     ) -> ProjectResponse:
         """Get project details (Workspace members only)."""
+        cache_key = f"projects:detail:{project_id}"
+        if self.cache:
+            cached = await self.cache.get_json(cache_key)
+            if cached:
+                # Still verify workspace access for cached responses
+                await self.workspace_service.check_workspace_access(
+                    workspace_id=cached["workspace_id"],
+                    current_user=current_user,
+                )
+                return ProjectResponse.model_validate(cached)
+
         project = await self.get_project_with_access(project_id=project_id, current_user=current_user)
-        return ProjectResponse.model_validate(project)
+        res = ProjectResponse.model_validate(project)
+        if self.cache:
+            await self.cache.set_json(cache_key, res.model_dump())
+        return res
 
     async def update_project(
         self,
@@ -116,6 +153,9 @@ class ProjectService:
 
         update_data = project_in.model_dump(exclude_unset=True)
         updated = await self.project_repo.update(project, **update_data)
+        if self.cache:
+            await self.cache.delete(f"projects:detail:{project_id}")
+            await self.cache.delete_pattern(f"projects:workspace:{project.workspace_id}:*")
         return ProjectResponse.model_validate(updated)
 
     async def delete_project(
@@ -129,4 +169,9 @@ class ProjectService:
             current_user=current_user,
             required_role=WorkspaceMemberRole.EDITOR,
         )
+        workspace_id = project.workspace_id
         await self.project_repo.delete(project)
+        if self.cache:
+            await self.cache.delete(f"projects:detail:{project_id}")
+            await self.cache.delete_pattern(f"projects:workspace:{workspace_id}:*")
+            await self.cache.delete_pattern(f"tasks:project:{project_id}:*")
