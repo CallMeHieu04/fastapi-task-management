@@ -100,11 +100,11 @@ class TaskService:
         else:
             accessible_user_id = current_user.id if current_user.role != UserRole.ADMIN else None
 
-        cache_key = (
-            f"tasks:u{current_user.id}:pid{filters.project_id}:p{filters.page}:l{filters.limit}:"
-            f"s{filters.status}:pr{filters.priority}:a{filters.assignee_id}:lbl{filters.label_id}:"
-            f"q{filters.search}:sb{filters.sort_by}:o{filters.order}"
-        )
+        filter_items = [
+            f"{k}={v.value if hasattr(v, 'value') else (v.isoformat() if hasattr(v, 'isoformat') else v)}"
+            for k, v in sorted(filters.__dict__.items())
+        ]
+        cache_key = f"tasks:list:u{current_user.id}:{':'.join(filter_items)}"
         if self.cache:
             cached = await self.cache.get_json(cache_key)
             if cached:

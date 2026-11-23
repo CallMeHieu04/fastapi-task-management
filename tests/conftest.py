@@ -7,6 +7,7 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app import models  # noqa: F401 - registers all SQLAlchemy tables in Base.metadata
+from app.core.cache import cache_service
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app as fastapi_app
@@ -38,11 +39,13 @@ TestingSessionLocal = async_sessionmaker(
 
 @pytest.fixture(autouse=True)
 async def setup_test_db():
-    """Create all tables before each test and drop them after."""
+    """Create all tables before each test and drop them after, flushing cache."""
+    await cache_service.clear_all()
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield
+    await cache_service.clear_all()
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
 

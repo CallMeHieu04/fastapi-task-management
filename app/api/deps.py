@@ -18,7 +18,16 @@ from app.core.constants import (
 from app.core.exceptions import ForbiddenException, UnauthorizedException
 from app.core.security import decode_token_claim
 from app.db.session import get_db
-from app.models.enums import ProjectStatus, TaskPriority, TaskStatus, TokenType, UserRole
+from app.models.enums import (
+    ProjectSortBy,
+    ProjectStatus,
+    SortOrder,
+    TaskPriority,
+    TaskSortBy,
+    TaskStatus,
+    TokenType,
+    UserRole,
+)
 from app.models.user import User
 from app.repositories.comment_repository import CommentRepository
 from app.repositories.label_repository import LabelRepository
@@ -263,9 +272,9 @@ class ProjectFilterParams:
             ProjectStatus | None, Query(description="Filter by project status (ACTIVE, ARCHIVED)")
         ] = None,
         sort_by: Annotated[
-            str, Query(description="Field to sort by: created_at, name, status, updated_at")
-        ] = "created_at",
-        order: Annotated[str, Query(pattern="^(asc|desc)$", description="Sort order: asc or desc")] = "desc",
+            ProjectSortBy, Query(description="Field to sort by: created_at, name, status")
+        ] = ProjectSortBy.CREATED_AT,
+        order: Annotated[SortOrder, Query(description="Sort order: asc or desc")] = SortOrder.DESC,
         page: Annotated[int, Query(ge=1, description="Page number starting at 1")] = DEFAULT_PAGE,
         limit: Annotated[
             int, Query(ge=1, le=MAX_PAGE_SIZE, description=f"Items per page (max {MAX_PAGE_SIZE})")
@@ -293,9 +302,9 @@ class TaskFilterParams:
         due_date_from: Annotated[datetime | None, Query(description="Filter tasks due on or after date")] = None,
         due_date_to: Annotated[datetime | None, Query(description="Filter tasks due on or before date")] = None,
         sort_by: Annotated[
-            str, Query(description="Field to sort by: created_at, due_date, priority, title, status, updated_at")
-        ] = "created_at",
-        order: Annotated[str, Query(pattern="^(asc|desc)$", description="Sort order: asc or desc")] = "desc",
+            TaskSortBy, Query(description="Field to sort by: created_at, due_date, priority, title, status, updated_at")
+        ] = TaskSortBy.CREATED_AT,
+        order: Annotated[SortOrder, Query(description="Sort order: asc or desc")] = SortOrder.DESC,
         page: Annotated[int, Query(ge=1, description="Page number starting at 1")] = DEFAULT_PAGE,
         limit: Annotated[
             int, Query(ge=1, le=MAX_PAGE_SIZE, description=f"Items per page (max {MAX_PAGE_SIZE})")

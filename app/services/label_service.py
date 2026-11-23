@@ -142,6 +142,9 @@ class LabelService:
             await self.label_repo.session.rollback()
             raise ConflictException(MSG_LABEL_ALREADY_EXISTS.format(name=label_in.name or label.name)) from None
 
+        if self.cache:
+            await self.cache.delete_pattern("tasks:*")
+
         return LabelResponse.model_validate(updated)
 
     async def delete_label(
@@ -161,6 +164,8 @@ class LabelService:
             for_write=True,
         )
         await self.label_repo.delete(label)
+        if self.cache:
+            await self.cache.delete_pattern("tasks:*")
 
     async def attach_label_to_task(
         self,

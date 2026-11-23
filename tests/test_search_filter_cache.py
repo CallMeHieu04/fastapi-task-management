@@ -325,3 +325,200 @@ async def test_process_time_middleware(client: AsyncClient):
     assert res.status_code == 200
     assert "x-process-time" in res.headers
     assert float(res.headers["x-process-time"]) >= 0.0
+
+
+@pytest.mark.asyncio
+async def test_due_date_filter_cache_isolation(client: AsyncClient):
+    """Verify that different due_date_from / due_date_to filters generate distinct cache keys."""
+    token, _ = await create_user_and_token(client, "due_cache@example.com", "Due Date User")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    ws = (await client.post("/api/v1/workspaces", json={"name": "Due WS"}, headers=headers)).json()
+    proj = (
+        await client.post(f"/api/v1/workspaces/{ws['id']}/projects", json={"name": "Due Proj"}, headers=headers)
+    ).json()
+
+    # Task 1: due 2030-01-15
+    await client.post(
+        f"/api/v1/projects/{proj['id']}/tasks",
+        json={"title": "Early Task", "due_date": "2030-01-15T00:00:00Z"},
+        headers=headers,
+    )
+    # Task 2: due 2030-06-15
+    await client.post(
+        f"/api/v1/projects/{proj['id']}/tasks",
+        json={"title": "Late Task", "due_date": "2030-06-15T00:00:00Z"},
+        headers=headers,
+    )
+
+    # 1. Query due_date_to = 2030-02-01 (should return Early Task only)
+    res1 = await client.get(
+        f"/api/v1/projects/{proj['id']}/tasks?due_date_to=2030-02-01T00:00:00Z",
+        headers=headers,
+    )
+    assert res1.status_code == 200
+    items1 = res1.json()["items"]
+    assert len(items1) == 1
+    assert items1[0]["title"] == "Early Task"
+
+    # 2. Query due_date_from = 2030-05-01 (should return Late Task only, not cached Early Task)
+    res2 = await client.get(
+        f"/api/v1/projects/{proj['id']}/tasks?due_date_from=2030-05-01T00:00:00Z",
+        headers=headers,
+    )
+    assert res2.status_code == 200
+    items2 = res2.json()["items"]
+    assert len(items2) == 1
+    assert items2[0]["title"] == "Late Task"
+
+
+@pytest.mark.asyncio
+async def test_workspace_member_removal_invalidates_task_cache(client: AsyncClient):
+    """Verify that removing a member from a workspace purges task cache so the ex-member loses access."""
+    token_owner, _ = await create_user_and_token(client, "ws_owner@example.com", "WS Owner")
+    token_member, member_id = await create_user_and_token(client, "ws_member@example.com", "WS Member")
+    owner_headers = {"Authorization": f"Bearer {token_owner}"}
+    member_headers = {"Authorization": f"Bearer {token_member}"}
+
+    ws = (await client.post("/api/v1/workspaces", json={"name": "Shared WS"}, headers=owner_headers)).json()
+    ws_id = ws["id"]
+    proj = (
+        await client.post(f"/api/v1/workspaces/{ws_id}/projects", json={"name": "Shared Proj"}, headers=owner_headers)
+    ).json()
+    await client.post(
+        f"/api/v1/projects/{proj['id']}/tasks", json={"title": "Confidential Task"}, headers=owner_headers
+    )
+
+    # Add member
+    await client.post(
+        f"/api/v1/workspaces/{ws_id}/members",
+        json={"user_id": member_id, "role": "VIEWER"},
+        headers=owner_headers,
+    )
+
+    # Member lists tasks (populates cache)
+    list1 = await client.get("/api/v1/tasks", headers=member_headers)
+    assert list1.status_code == 200
+    assert len(list1.json()["items"]) == 1
+    assert list1.json()["items"][0]["title"] == "Confidential Task"
+
+    # Owner removes member from workspace
+    del_res = await client.delete(f"/api/v1/workspaces/{ws_id}/members/{member_id}", headers=owner_headers)
+    assert del_res.status_code == 204
+
+    # Member lists tasks again - must NOT see cached task
+    list2 = await client.get("/api/v1/tasks", headers=member_headers)
+    assert list2.status_code == 200
+    assert len(list2.json()["items"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_label_update_and_delete_invalidates_task_cache(client: AsyncClient):
+    """Verify that updating or deleting a label purges task caches to prevent stale label data in TaskResponse."""
+    token, _ = await create_user_and_token(client, "lbl_cache@example.com", "Label Cache User")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    ws = (await client.post("/api/v1/workspaces", json={"name": "Lbl WS"}, headers=headers)).json()
+    proj = (
+        await client.post(f"/api/v1/workspaces/{ws['id']}/projects", json={"name": "Lbl Proj"}, headers=headers)
+    ).json()
+
+    lbl = (
+        await client.post(
+            f"/api/v1/projects/{proj['id']}/labels", json={"name": "Initial Label", "color": "#10B981"}, headers=headers
+        )
+    ).json()
+    lbl_id = lbl["id"]
+
+    task = (
+        await client.post(f"/api/v1/projects/{proj['id']}/tasks", json={"title": "Labeled Task"}, headers=headers)
+    ).json()
+    task_id = task["id"]
+
+    # Attach label
+    await client.post(f"/api/v1/tasks/{task_id}/labels/{lbl_id}", headers=headers)
+
+    # 1. Fetch task detail (populates cache)
+    d1 = await client.get(f"/api/v1/tasks/{task_id}", headers=headers)
+    assert d1.status_code == 200
+    assert len(d1.json()["labels"]) == 1
+    assert d1.json()["labels"][0]["name"] == "Initial Label"
+
+    # 2. Update label name (must invalidate tasks:* cache)
+    patch_lbl = await client.patch(f"/api/v1/labels/{lbl_id}", json={"name": "Renamed Label"}, headers=headers)
+    assert patch_lbl.status_code == 200
+
+    # Task detail must return fresh label name, not cached old name
+    d2 = await client.get(f"/api/v1/tasks/{task_id}", headers=headers)
+    assert d2.status_code == 200
+    assert d2.json()["labels"][0]["name"] == "Renamed Label"
+
+    # 3. Delete label (must invalidate tasks:* cache)
+    del_lbl = await client.delete(f"/api/v1/labels/{lbl_id}", headers=headers)
+    assert del_lbl.status_code == 204
+
+    # Task detail must reflect that label is gone
+    d3 = await client.get(f"/api/v1/tasks/{task_id}", headers=headers)
+    assert d3.status_code == 200
+    assert len(d3.json()["labels"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_priority_sorting_logical_order(client: AsyncClient):
+    """Verify that sorting by priority uses logical rank (LOW < MEDIUM < HIGH < URGENT), not alphabetical."""
+    token, _ = await create_user_and_token(client, "prio_sort@example.com", "Prio Sort User")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    ws = (await client.post("/api/v1/workspaces", json={"name": "Prio WS"}, headers=headers)).json()
+    proj = (
+        await client.post(f"/api/v1/workspaces/{ws['id']}/projects", json={"name": "Prio Proj"}, headers=headers)
+    ).json()
+    proj_id = proj["id"]
+
+    # Create tasks in mixed order
+    await client.post(
+        f"/api/v1/projects/{proj_id}/tasks", json={"title": "T_URGENT", "priority": "URGENT"}, headers=headers
+    )
+    await client.post(f"/api/v1/projects/{proj_id}/tasks", json={"title": "T_LOW", "priority": "LOW"}, headers=headers)
+    await client.post(
+        f"/api/v1/projects/{proj_id}/tasks", json={"title": "T_HIGH", "priority": "HIGH"}, headers=headers
+    )
+    await client.post(
+        f"/api/v1/projects/{proj_id}/tasks", json={"title": "T_MEDIUM", "priority": "MEDIUM"}, headers=headers
+    )
+
+    # Sort priority ASC -> LOW, MEDIUM, HIGH, URGENT
+    res_asc = await client.get(f"/api/v1/projects/{proj_id}/tasks?sort_by=priority&order=asc", headers=headers)
+    assert res_asc.status_code == 200
+    prios_asc = [t["priority"] for t in res_asc.json()["items"]]
+    assert prios_asc == ["LOW", "MEDIUM", "HIGH", "URGENT"]
+
+    # Sort priority DESC -> URGENT, HIGH, MEDIUM, LOW
+    res_desc = await client.get(f"/api/v1/projects/{proj_id}/tasks?sort_by=priority&order=desc", headers=headers)
+    assert res_desc.status_code == 200
+    prios_desc = [t["priority"] for t in res_desc.json()["items"]]
+    assert prios_desc == ["URGENT", "HIGH", "MEDIUM", "LOW"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_sort_by_and_order_validation(client: AsyncClient):
+    """Verify that invalid sort_by or order query parameter triggers 422 Unprocessable Entity."""
+    token, _ = await create_user_and_token(client, "val_sort@example.com", "Val Sort User")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    ws = (await client.post("/api/v1/workspaces", json={"name": "Val WS"}, headers=headers)).json()
+    proj = (
+        await client.post(f"/api/v1/workspaces/{ws['id']}/projects", json={"name": "Val Proj"}, headers=headers)
+    ).json()
+
+    # Bogus sort_by on tasks -> 422
+    res_bogus_task = await client.get(f"/api/v1/projects/{proj['id']}/tasks?sort_by=bogus", headers=headers)
+    assert res_bogus_task.status_code == 422
+
+    # Bogus order on tasks -> 422
+    res_bogus_order = await client.get(f"/api/v1/projects/{proj['id']}/tasks?order=random", headers=headers)
+    assert res_bogus_order.status_code == 422
+
+    # Bogus sort_by on projects -> 422
+    res_bogus_proj = await client.get(f"/api/v1/workspaces/{ws['id']}/projects?sort_by=invalid_col", headers=headers)
+    assert res_bogus_proj.status_code == 422

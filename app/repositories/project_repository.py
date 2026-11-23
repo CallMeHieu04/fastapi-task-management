@@ -36,13 +36,16 @@ class ProjectRepository(BaseRepository[Project]):
         total_res = await self.session.execute(count_stmt)
         total = total_res.scalar_one()
 
+        sort_by_str = sort_by.value if hasattr(sort_by, "value") else str(sort_by)
+        order_str = order.value if hasattr(order, "value") else str(order)
+
         sort_column_map = {
             "created_at": Project.created_at,
             "name": Project.name,
             "status": Project.status,
         }
-        col = sort_column_map.get(sort_by, Project.created_at)
-        sort_expr = col.asc() if order.lower() == "asc" else col.desc()
+        col = sort_column_map.get(sort_by_str, Project.created_at)
+        sort_expr = col.asc() if order_str.lower() == "asc" else col.desc()
 
         stmt = query.order_by(sort_expr, Project.id.desc()).offset((page - 1) * limit).limit(limit)
         result = await self.session.execute(stmt)

@@ -197,6 +197,8 @@ class WorkspaceService:
         if self.cache:
             await self.cache.delete(f"workspaces:detail:{workspace_id}")
             await self.cache.delete_pattern("workspaces:user:*")
+            await self.cache.delete_pattern("projects:*")
+            await self.cache.delete_pattern("tasks:*")
 
     async def add_member(
         self,
@@ -236,6 +238,7 @@ class WorkspaceService:
         if self.cache:
             await self.cache.delete(f"workspaces:detail:{workspace_id}")
             await self.cache.delete_pattern("workspaces:user:*")
+            await self.cache.delete_pattern("tasks:*")
         return WorkspaceMemberResponse(
             user_id=target_user.id,
             email=target_user.email,
@@ -265,3 +268,4 @@ class WorkspaceService:
         if self.cache:
             await self.cache.delete(f"workspaces:detail:{workspace_id}")
             await self.cache.delete_pattern("workspaces:user:*")
+            await self.cache.delete_pattern("tasks:*")

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import TaskPriority, TaskStatus
@@ -82,16 +82,28 @@ class TaskRepository(BaseRepository[Task]):
         total = total_res.scalar_one()
 
         # Dynamic sorting with tie-breaker
-        sort_column_map = {
-            "created_at": Task.created_at,
-            "due_date": Task.due_date,
-            "priority": Task.priority,
-            "title": Task.title,
-            "status": Task.status,
-            "updated_at": Task.updated_at,
-        }
-        col = sort_column_map.get(sort_by, Task.created_at)
-        sort_expr = col.asc() if order.lower() == "asc" else col.desc()
+        sort_by_str = sort_by.value if hasattr(sort_by, "value") else str(sort_by)
+        order_str = order.value if hasattr(order, "value") else str(order)
+
+        if sort_by_str == "priority":
+            priority_order = case(
+                (Task.priority == TaskPriority.LOW, 1),
+                (Task.priority == TaskPriority.MEDIUM, 2),
+                (Task.priority == TaskPriority.HIGH, 3),
+                (Task.priority == TaskPriority.URGENT, 4),
+                else_=0,
+            )
+            sort_expr = priority_order.asc() if order_str.lower() == "asc" else priority_order.desc()
+        else:
+            sort_column_map = {
+                "created_at": Task.created_at,
+                "due_date": Task.due_date,
+                "title": Task.title,
+                "status": Task.status,
+                "updated_at": Task.updated_at,
+            }
+            col = sort_column_map.get(sort_by_str, Task.created_at)
+            sort_expr = col.asc() if order_str.lower() == "asc" else col.desc()
 
         # Fetch paginated slice ordered stably by sort expression and primary key
         stmt = query.order_by(sort_expr, Task.id.desc()).offset(skip).limit(limit)
