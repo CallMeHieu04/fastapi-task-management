@@ -38,10 +38,12 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Create a non-root application user for security
 RUN groupadd -r appgroup && useradd -r -g appgroup -d /app -s /sbin/nologin appuser
 
-# Copy application source code
+# Copy application source code and entrypoint
 COPY --chown=appuser:appgroup alembic.ini ./
 COPY --chown=appuser:appgroup alembic ./alembic
 COPY --chown=appuser:appgroup app ./app
+COPY --chown=appuser:appgroup docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -58,5 +60,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Start uvicorn server
+ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

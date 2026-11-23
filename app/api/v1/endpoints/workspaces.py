@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Path, Query, status
 
 from app.api.deps import CurrentUser, get_workspace_service
 from app.core.constants import DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
@@ -12,6 +12,7 @@ from app.schemas.workspace import (
     WorkspaceResponse,
     WorkspaceUpdate,
 )
+from app.services.notification_service import NotificationService
 from app.services.workspace_service import WorkspaceService
 
 router = APIRouter()
@@ -131,7 +132,7 @@ async def delete_workspace(
     response_model=WorkspaceMemberResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Add workspace member",
-    description="Invite/add a user to the workspace with specified role (OWNER only).",
+    description="Invite/add a user to the workspace with role (OWNER only). Dispatches an email via BackgroundTasks.",
     responses={
         400: {"description": "Owner already has full permissions"},
         403: {"description": "Permission denied (OWNER role required)"},
@@ -145,9 +146,19 @@ async def add_workspace_member(
     member_in: WorkspaceMemberAdd,
     current_user: CurrentUser,
     workspace_service: Annotated[WorkspaceService, Depends(get_workspace_service)],
+    background_tasks: BackgroundTasks,
 ) -> WorkspaceMemberResponse:
     """Add a member to the workspace with specified role (OWNER only)."""
-    return await workspace_service.add_member(workspace_id=id, current_user=current_user, member_in=member_in)
+    member = await workspace_service.add_member(workspace_id=id, current_user=current_user, member_in=member_in)
+    if member.email:
+        role_val = member.role.value if hasattr(member.role, "value") else str(member.role)
+        background_tasks.add_task(
+            NotificationService.send_workspace_invitation,
+            email=member.email,
+            workspace_name=f"Workspace #{id}",
+            role=role_val,
+        )
+    return member
 
 
 @router.delete(
