@@ -29,3 +29,28 @@ class TaskPriority(str, enum.Enum):
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
     URGENT = "URGENT"
+
+
+class TokenType(str, enum.Enum):
+    ACCESS = "access"
+    REFRESH = "refresh"
+
+
+class SortOrder(str, enum.Enum):
+    ASC = "asc"
+    DESC = "desc"
+
+
+class TaskSortBy(str, enum.Enum):
+    CREATED_AT = "created_at"
+    DUE_DATE = "due_date"
+    PRIORITY = "priority"
+    TITLE = "title"
+    STATUS = "status"
+    UPDATED_AT = "updated_at"
+
+
+class ProjectSortBy(str, enum.Enum):
+    CREATED_AT = "created_at"
+    NAME = "name"
+    STATUS = "status"

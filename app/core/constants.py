@@ -2,11 +2,11 @@
 # Model & Schema Field Constraints
 # ==============================================================================
 
-# User
+# User & Password (Bcrypt byte limit is 72 bytes, min 8 characters)
 USER_NAME_MIN_LENGTH = 2
 USER_NAME_MAX_LENGTH = 100
-PASSWORD_MIN_LENGTH = 6
-PASSWORD_MAX_LENGTH = 100
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_BYTES = 72
 
 # Workspace
 WORKSPACE_NAME_MIN_LENGTH = 1
@@ -53,23 +53,47 @@ MSG_LABEL_NOT_FOUND = "Label #{id} not found."
 MSG_LABEL_NOT_IN_PROJECT = "Label #{id} not found in this project."
 MSG_COMMENT_NOT_FOUND = "Comment #{id} not found."
 
+# Authentication & Security Messages
+MSG_NOT_AUTHENTICATED = "Not authenticated."
 MSG_EMAIL_EXISTS = "A user with this email address already exists."
 MSG_EMAIL_IN_USE = "Email is already in use by another account."
 MSG_INVALID_CREDENTIALS = "Incorrect email or password."
 MSG_USER_INACTIVE = "User account is inactive."
 MSG_TOKEN_REVOKED = "Refresh token has been revoked."
+MSG_TOKEN_EXPIRED = "Refresh token has expired."
+MSG_TOKEN_REUSED_REVOKED = "Token reuse detected. All sessions revoked."
 MSG_INVALID_TOKEN = "Invalid or expired token."
 MSG_INVALID_TOKEN_TYPE = "Invalid token type."
+MSG_ACCESS_TOKEN_REQUIRED = "Invalid token type. Access token expected."
+MSG_REFRESH_TOKEN_REQUIRED = "Invalid token type. Refresh token expected."
+MSG_COULD_NOT_VALIDATE = "Could not validate credentials."
 MSG_PASSWORD_MISMATCH = "Current password does not match."
+MSG_CANNOT_DELETE_SELF = "You cannot delete your own account."
+MSG_CANNOT_DELETE_LAST_ADMIN = "Cannot delete the last active administrator."
+MSG_CANNOT_DELETE_WORKSPACE_OWNER = "Cannot delete user who owns active workspaces. Transfer ownership first."
+MSG_ADMIN_REQUIRED = "Administrator privileges are required for this operation."
 
+# Authorization & Workspace Messages
 MSG_WORKSPACE_ACCESS_DENIED = "You do not have access to this workspace."
 MSG_OWNER_REQUIRED = "Only workspace OWNER can perform this action."
 MSG_VIEWER_CANNOT_MODIFY = "Workspace VIEWERS are not permitted to modify this resource."
 MSG_CANNOT_REMOVE_OWNER = "Cannot remove the owner from their own workspace."
 MSG_OWNER_ALREADY_MEMBER = "The workspace owner already has full OWNER permissions."
+MSG_MEMBER_ALREADY_EXISTS = "User is already a member of this workspace."
 MSG_MEMBER_NOT_FOUND = "Member not found in workspace."
+MSG_MEMBER_IDENTIFIER_REQUIRED = "Either user_id or email must be provided."
+MSG_ASSIGNEE_NOT_MEMBER = "Assignee must be a member of the workspace."
+MSG_PROJECT_ARCHIVED = "Cannot modify resources in an archived project."
 MSG_DELETE_OWN_COMMENT_ONLY = "You can only delete your own comments."
+MSG_EDIT_OWN_COMMENT_ONLY = "You can only edit your own comments."
+MSG_LABEL_NOT_ATTACHED = "Label #{id} is not attached to this task."
+MSG_LABEL_ALREADY_ATTACHED = "Label #{id} is already attached to this task."
+MSG_LABEL_ALREADY_EXISTS = "Label with name '{name}' already exists in this project."
+MSG_INVALID_HEX_COLOR = "Color must be a valid hex color code (e.g., #3B82F6 or #FFF)."
 
 # Validation error messages
 MSG_CANNOT_BE_NULL = "{field} cannot be null when provided."
 MSG_CANNOT_BE_BLANK = "{field} cannot be empty or only whitespace."
+MSG_DUE_DATE_PAST = "Due date cannot be in the past."
+MSG_PASSWORD_MIN_LENGTH = "Password must be at least {min_len} characters long."
+MSG_PASSWORD_MAX_BYTES = "Password cannot exceed {max_bytes} bytes."
