@@ -12,14 +12,30 @@ from app.core.lifespan import lifespan
 
 logger = logging.getLogger("app.access")
 
+tags_metadata = [
+    {"name": "Authentication", "description": "Đăng ký, đăng nhập và quản lý JWT token."},
+    {"name": "Users", "description": "Thông tin người dùng và quyền admin."},
+    {"name": "Workspaces", "description": "Quản lý workspace và phân quyền thành viên."},
+    {"name": "Projects", "description": "Quản lý project trong workspace."},
+    {"name": "Tasks", "description": "CRUD task, tìm kiếm, lọc, phân trang và background task."},
+    {"name": "Labels", "description": "Quản lý nhãn công việc theo project."},
+    {"name": "Comments", "description": "Bình luận trong task."},
+    {"name": "Health", "description": "Kiểm tra trạng thái hệ thống."},
+]
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description=settings.PROJECT_DESCRIPTION,
     version=settings.VERSION,
+    openapi_tags=tags_metadata,
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    swagger_ui_parameters={
+        "persistAuthorization": True,
+        "displayRequestDuration": True,
+    },
 )
 
 

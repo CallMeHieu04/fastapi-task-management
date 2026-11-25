@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # Security & JWT Configuration (No hardcoded default secret key)
     SECRET_KEY: str = Field(
-        default="taskhub-insecure-secret-key-for-local-dev-min-32-chars",
+        ...,
         min_length=32,
         description="JWT Secret key must be at least 32 characters",
     )
@@ -40,4 +40,4 @@ class Settings(BaseSettings):
     )
 
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]

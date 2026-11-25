@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, BackgroundTasks, Depends, status
 
 from app.api.deps import get_auth_service
 from app.schemas.common import MessageResponse
@@ -16,6 +16,7 @@ router = APIRouter()
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Register a new user account",
+    description="Register a new account. Automatically dispatches an asynchronous welcome email via BackgroundTasks.",
     responses={
         409: {"description": "Email already exists"},
         422: {"description": "Validation error"},
@@ -24,9 +25,10 @@ router = APIRouter()
 async def register(
     user_in: UserCreate,
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
+    background_tasks: BackgroundTasks,
 ) -> UserResponse:
     """Register a new account. Role is assigned automatically by the system as MEMBER."""
-    return await auth_service.register(user_in=user_in)
+    return await auth_service.register(user_in=user_in, background_tasks=background_tasks)
 
 
 @router.post(

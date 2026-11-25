@@ -1,9 +1,10 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Path, status
 
 from app.api.deps import CurrentUser, TaskFilterParams, get_task_service
-from app.schemas.common import PaginatedResponse
+from app.core.constants import MSG_REMINDER_QUEUED
+from app.schemas.common import MessageResponse, PaginatedResponse
 from app.schemas.task import ProjectTaskCreate, TaskCreate, TaskResponse, TaskUpdate
 from app.services.task_service import TaskService
 
@@ -15,7 +16,7 @@ router = APIRouter()
     response_model=TaskResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create task in project",
-    description="Create a task associated with this project (Workspace OWNER or EDITOR only).",
+    description="Create a task associated with this project. Dispatches background assignment alert.",
     responses={
         400: {"description": "Project archived or invalid assignee"},
         401: {"description": "Authentication required"},
@@ -28,9 +29,15 @@ async def create_project_task(
     task_in: ProjectTaskCreate,
     current_user: CurrentUser,
     task_service: Annotated[TaskService, Depends(get_task_service)],
+    background_tasks: BackgroundTasks,
 ) -> TaskResponse:
     """Create a new task within the specified project."""
-    return await task_service.create_project_task(project_id=id, current_user=current_user, task_in=task_in)
+    return await task_service.create_project_task(
+        project_id=id,
+        current_user=current_user,
+        task_in=task_in,
+        background_tasks=background_tasks,
+    )
 
 
 @router.get(
@@ -82,7 +89,7 @@ async def list_tasks(
     response_model=TaskResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new task",
-    description="Create a task with validated title, optional description, priority, and project attachment.",
+    description="Create a task with validated fields. Queues assignment notification if assigned.",
     responses={
         400: {"description": "Project archived or invalid assignee"},
         401: {"description": "Authentication required"},
@@ -94,8 +101,13 @@ async def create_task(
     task_in: TaskCreate,
     current_user: CurrentUser,
     service: Annotated[TaskService, Depends(get_task_service)],
+    background_tasks: BackgroundTasks,
 ) -> TaskResponse:
-    return await service.create_task(task_in=task_in, current_user=current_user)
+    return await service.create_task(
+        task_in=task_in,
+        current_user=current_user,
+        background_tasks=background_tasks,
+    )
 
 
 @router.get(
@@ -122,7 +134,7 @@ async def get_task(
     response_model=TaskResponse,
     status_code=status.HTTP_200_OK,
     summary="Partially update a task",
-    description="Update task fields. Explicit null on required fields is rejected with 422.",
+    description="Update task fields (explicit null rejected with 422). Queues background notification.",
     responses={
         400: {"description": "Project archived or invalid assignee"},
         401: {"description": "Authentication required"},
@@ -136,8 +148,14 @@ async def update_task(
     task_in: TaskUpdate,
     current_user: CurrentUser,
     service: Annotated[TaskService, Depends(get_task_service)],
+    background_tasks: BackgroundTasks,
 ) -> TaskResponse:
-    return await service.update_task(task_id=id, task_in=task_in, current_user=current_user)
+    return await service.update_task(
+        task_id=id,
+        task_in=task_in,
+        current_user=current_user,
+        background_tasks=background_tasks,
+    )
 
 
 @router.delete(
@@ -158,3 +176,27 @@ async def delete_task(
     service: Annotated[TaskService, Depends(get_task_service)],
 ) -> None:
     await service.delete_task(task_id=id, current_user=current_user)
+
+
+@router.post(
+    "/tasks/{id}/remind",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Dispatch background reminder for task",
+    description="Enqueue an asynchronous task reminder notification to the assignee (EDITOR or OWNER only).",
+    responses={
+        400: {"description": "Task does not have an assigned member or project is archived"},
+        401: {"description": "Authentication required"},
+        403: {"description": "Permission denied (EDITOR role required)"},
+        404: {"description": "Task or assignee not found"},
+    },
+)
+async def remind_task_assignee(
+    id: Annotated[int, Path(ge=1, description="Task ID")],
+    current_user: CurrentUser,
+    service: Annotated[TaskService, Depends(get_task_service)],
+    background_tasks: BackgroundTasks,
+) -> MessageResponse:
+    """Send an asynchronous reminder to the task's assignee."""
+    await service.remind_task(task_id=id, current_user=current_user, background_tasks=background_tasks)
+    return MessageResponse(message=MSG_REMINDER_QUEUED)

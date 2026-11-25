@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+from fastapi import BackgroundTasks
 from sqlalchemy.exc import IntegrityError
 
 from app.core.constants import (
@@ -29,6 +30,7 @@ from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.token import Token
 from app.schemas.user import UserCreate, UserLogin, UserResponse
+from app.services.notification_service import NotificationService
 
 
 class AuthService:
@@ -42,7 +44,11 @@ class AuthService:
         self.user_repo = user_repo
         self.token_repo = token_repo
 
-    async def register(self, user_in: UserCreate) -> UserResponse:
+    async def register(
+        self,
+        user_in: UserCreate,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> UserResponse:
         """Register a new user. Enforces MEMBER role and catches IntegrityError for 409."""
         user = User(
             email=user_in.email,
@@ -53,10 +59,13 @@ class AuthService:
         )
         try:
             created_user = await self.user_repo.create(user)
-            return UserResponse.model_validate(created_user)
         except IntegrityError as err:
             await self.user_repo.session.rollback()
             raise ConflictException(MSG_EMAIL_EXISTS) from err
+
+        if background_tasks:
+            background_tasks.add_task(NotificationService.send_welcome_email, user_id=created_user.id)
+        return UserResponse.model_validate(created_user)
 
     async def login(self, login_data: UserLogin) -> Token:
         """Authenticate user and issue access/refresh token pair.

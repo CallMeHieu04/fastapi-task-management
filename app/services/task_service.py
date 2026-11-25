@@ -1,11 +1,14 @@
 import math
 from typing import TYPE_CHECKING
 
+from fastapi import BackgroundTasks
+
 from app.core.cache import CacheService
 from app.core.constants import (
     MSG_ASSIGNEE_NOT_MEMBER,
     MSG_PROJECT_ARCHIVED,
     MSG_PROJECT_NOT_FOUND,
+    MSG_TASK_NO_ASSIGNEE,
     MSG_TASK_NOT_FOUND,
     MSG_USER_NOT_FOUND,
 )
@@ -19,6 +22,7 @@ from app.repositories.task_repository import TaskRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.common import PaginatedResponse, PaginationMeta
 from app.schemas.task import ProjectTaskCreate, TaskCreate, TaskResponse, TaskUpdate
+from app.services.notification_service import NotificationService
 from app.services.workspace_service import WorkspaceService
 
 if TYPE_CHECKING:
@@ -71,10 +75,10 @@ class TaskService:
 
         return project
 
-    async def _verify_assignee(self, workspace_id: int | None, assignee_id: int | None) -> None:
+    async def _verify_assignee(self, workspace_id: int | None, assignee_id: int | None) -> User | None:
         """Verify that assignee exists and belongs to the project's workspace."""
         if assignee_id is None:
-            return
+            return None
 
         user = await self.user_repo.get_by_id(assignee_id)
         if not user:
@@ -84,6 +88,27 @@ class TaskService:
             member = await self.workspace_service.workspace_repo.get_member(workspace_id, assignee_id)
             if not member:
                 raise BadRequestException(MSG_ASSIGNEE_NOT_MEMBER)
+
+        return user
+
+    def _verify_standalone_access(self, task_id: int, created_by: int | None, current_user: User) -> None:
+        """Ensure standalone tasks (without a project) are only accessible to their creator or an admin."""
+        if current_user.role != UserRole.ADMIN and created_by != current_user.id:
+            raise NotFoundException(MSG_TASK_NOT_FOUND.format(id=task_id))
+
+    def _queue_assignment_notification(
+        self,
+        background_tasks: BackgroundTasks | None,
+        task: Task,
+    ) -> None:
+        """Enqueue a task assignment notification if an assignee is present."""
+        if background_tasks and task.assignee_id is not None:
+            background_tasks.add_task(
+                NotificationService.send_task_assignment_notification,
+                task_id=task.id,
+                task_title=task.title,
+                assignee_id=task.assignee_id,
+            )
 
     async def list_tasks(
         self,
@@ -149,6 +174,8 @@ class TaskService:
             if cached:
                 if cached.get("project_id") is not None:
                     await self._get_project_with_access(cached["project_id"], current_user)
+                else:
+                    self._verify_standalone_access(task_id, cached.get("created_by"), current_user)
                 return TaskResponse.model_validate(cached)
 
         task = await self.repository.get_by_id(task_id)
@@ -157,13 +184,20 @@ class TaskService:
 
         if task.project_id is not None:
             await self._get_project_with_access(task.project_id, current_user)
+        else:
+            self._verify_standalone_access(task_id, task.created_by, current_user)
 
         res = self._to_response(task)
         if self.cache:
             await self.cache.set_json(cache_key, res.model_dump())
         return res
 
-    async def create_task(self, task_in: TaskCreate, current_user: User) -> TaskResponse:
+    async def create_task(
+        self,
+        task_in: TaskCreate,
+        current_user: User,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> TaskResponse:
         """Create a new task with validated project membership and assignee."""
         workspace_id = None
         if task_in.project_id is not None:
@@ -191,6 +225,7 @@ class TaskService:
             await self.cache.delete_pattern("tasks:u*")
             if task_in.project_id:
                 await self.cache.delete_pattern(f"tasks:*pid{task_in.project_id}:*")
+        self._queue_assignment_notification(background_tasks, task)
         return self._to_response(task)
 
     async def create_project_task(
@@ -198,6 +233,7 @@ class TaskService:
         project_id: int,
         current_user: User,
         task_in: ProjectTaskCreate,
+        background_tasks: BackgroundTasks | None = None,
     ) -> TaskResponse:
         """Create a task directly attached to a specific project without mutating input."""
         project = await self._get_project_with_access(
@@ -221,6 +257,7 @@ class TaskService:
         if self.cache:
             await self.cache.delete_pattern("tasks:u*")
             await self.cache.delete_pattern(f"tasks:*pid{project_id}:*")
+        self._queue_assignment_notification(background_tasks, task)
         return self._to_response(task)
 
     async def list_project_tasks(
@@ -238,8 +275,9 @@ class TaskService:
         task_id: int,
         task_in: TaskUpdate,
         current_user: User,
+        background_tasks: BackgroundTasks | None = None,
     ) -> TaskResponse:
-        """Update task attributes with RBAC and assignee validation."""
+        """Update task attributes with RBAC, assignee validation, and change notifications."""
         task = await self.repository.get_by_id(task_id)
         if not task:
             raise NotFoundException(MSG_TASK_NOT_FOUND.format(id=task_id))
@@ -253,9 +291,14 @@ class TaskService:
                 for_write=True,
             )
             workspace_id = project.workspace_id
+        else:
+            self._verify_standalone_access(task_id, task.created_by, current_user)
 
         if task_in.assignee_id is not None:
             await self._verify_assignee(workspace_id, task_in.assignee_id)
+
+        old_status = task.status
+        old_assignee_id = task.assignee_id
 
         update_data = task_in.model_dump(exclude_unset=True)
         updated_task = await self.repository.update(task, **update_data)
@@ -264,6 +307,20 @@ class TaskService:
             await self.cache.delete_pattern("tasks:u*")
             if task.project_id:
                 await self.cache.delete_pattern(f"tasks:*pid{task.project_id}:*")
+
+        if background_tasks:
+            if updated_task.status != old_status:
+                background_tasks.add_task(
+                    NotificationService.send_task_status_update_notification,
+                    task_id=updated_task.id,
+                    task_title=updated_task.title,
+                    old_status=old_status.value,
+                    new_status=updated_task.status.value,
+                    recipient_id=updated_task.assignee_id,
+                )
+            if updated_task.assignee_id is not None and updated_task.assignee_id != old_assignee_id:
+                self._queue_assignment_notification(background_tasks, updated_task)
+
         return self._to_response(updated_task)
 
     async def delete_task(self, task_id: int, current_user: User) -> None:
@@ -279,6 +336,8 @@ class TaskService:
                 required_role=WorkspaceMemberRole.EDITOR,
                 for_write=True,
             )
+        else:
+            self._verify_standalone_access(task_id, task.created_by, current_user)
 
         project_id = task.project_id
         await self.repository.delete(task)
@@ -287,3 +346,39 @@ class TaskService:
             await self.cache.delete_pattern("tasks:u*")
             if project_id:
                 await self.cache.delete_pattern(f"tasks:*pid{project_id}:*")
+
+    async def remind_task(
+        self,
+        task_id: int,
+        current_user: User,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> None:
+        """Verify EDITOR/owner access and enqueue a reminder notification for the task assignee."""
+        task = await self.repository.get_by_id(task_id)
+        if not task:
+            raise NotFoundException(MSG_TASK_NOT_FOUND.format(id=task_id))
+
+        if task.project_id is not None:
+            await self._get_project_with_access(
+                task.project_id,
+                current_user,
+                required_role=WorkspaceMemberRole.EDITOR,
+                for_write=True,
+            )
+        else:
+            self._verify_standalone_access(task_id, task.created_by, current_user)
+
+        if not task.assignee_id:
+            raise BadRequestException(MSG_TASK_NO_ASSIGNEE)
+
+        assignee = await self.user_repo.get_by_id(task.assignee_id)
+        if not assignee:
+            raise NotFoundException(MSG_USER_NOT_FOUND.format(id=task.assignee_id))
+
+        if background_tasks:
+            background_tasks.add_task(
+                NotificationService.send_task_reminder,
+                task_id=task.id,
+                task_title=task.title,
+                assignee_id=assignee.id,
+            )
