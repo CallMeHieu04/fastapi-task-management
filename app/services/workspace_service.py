@@ -1,5 +1,7 @@
 import math
 
+from fastapi import BackgroundTasks
+
 from app.core.cache import CacheService
 from app.core.constants import (
     DEFAULT_PAGE,
@@ -27,6 +29,7 @@ from app.schemas.workspace import (
     WorkspaceResponse,
     WorkspaceUpdate,
 )
+from app.services.notification_service import NotificationService
 
 
 class WorkspaceService:
@@ -205,6 +208,7 @@ class WorkspaceService:
         workspace_id: int,
         current_user: User,
         member_in: WorkspaceMemberAdd,
+        background_tasks: BackgroundTasks | None = None,
     ) -> WorkspaceMemberResponse:
         """Invite/add member to workspace (OWNER only)."""
         workspace = await self.workspace_repo.get_by_id(workspace_id)
@@ -239,6 +243,13 @@ class WorkspaceService:
             await self.cache.delete(f"workspaces:detail:{workspace_id}")
             await self.cache.delete_pattern("workspaces:user:*")
             await self.cache.delete_pattern("tasks:*")
+        if background_tasks:
+            background_tasks.add_task(
+                NotificationService.send_workspace_invitation,
+                user_id=target_user.id,
+                workspace_name=workspace.name,
+                role=member.role.value,
+            )
         return WorkspaceMemberResponse(
             user_id=target_user.id,
             email=target_user.email,

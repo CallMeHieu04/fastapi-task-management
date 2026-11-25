@@ -15,7 +15,8 @@ cp .env.example .env
 
 Các biến môi trường chính:
 - `DATABASE_URL`: Chuỗi kết nối database (mặc định dùng SQLite cho môi trường local: `sqlite+aiosqlite:///./taskhub.db`).
-- `SECRET_KEY`: Khóa bí mật dùng cho JWT (tối thiểu 32 ký tự).
+- `SECRET_KEY`: Khóa bí mật dùng cho JWT (bắt buộc tối thiểu 32 ký tự).
+- `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`: Thông tin PostgreSQL khi chạy bằng Docker Compose.
 - `REDIS_URL`: Địa chỉ kết nối Redis (mặc định tự động fallback sang in-memory cache nếu không chạy Redis).
 - `CACHE_ENABLED`: Bật hoặc tắt tính năng cache (`True` / `False`).
 
@@ -48,7 +49,7 @@ uv venv
 # Trên Linux/macOS:
 source .venv/bin/activate
 
-uv pip install -r requirements.txt
+uv pip install -r requirements-dev.txt
 ```
 
 2. Chạy migration database:

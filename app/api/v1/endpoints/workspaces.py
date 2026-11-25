@@ -12,7 +12,6 @@ from app.schemas.workspace import (
     WorkspaceResponse,
     WorkspaceUpdate,
 )
-from app.services.notification_service import NotificationService
 from app.services.workspace_service import WorkspaceService
 
 router = APIRouter()
@@ -149,16 +148,12 @@ async def add_workspace_member(
     background_tasks: BackgroundTasks,
 ) -> WorkspaceMemberResponse:
     """Add a member to the workspace with specified role (OWNER only)."""
-    member = await workspace_service.add_member(workspace_id=id, current_user=current_user, member_in=member_in)
-    if member.email:
-        role_val = member.role.value if hasattr(member.role, "value") else str(member.role)
-        background_tasks.add_task(
-            NotificationService.send_workspace_invitation,
-            email=member.email,
-            workspace_name=f"Workspace #{id}",
-            role=role_val,
-        )
-    return member
+    return await workspace_service.add_member(
+        workspace_id=id,
+        current_user=current_user,
+        member_in=member_in,
+        background_tasks=background_tasks,
+    )
 
 
 @router.delete(

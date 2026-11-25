@@ -2,12 +2,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Path, status
 
-from app.api.deps import CurrentUser, TaskFilterParams, get_task_service, get_user_repository
-from app.core.exceptions import BadRequestException
-from app.repositories.user_repository import UserRepository
+from app.api.deps import CurrentUser, TaskFilterParams, get_task_service
+from app.core.constants import MSG_REMINDER_QUEUED
 from app.schemas.common import MessageResponse, PaginatedResponse
 from app.schemas.task import ProjectTaskCreate, TaskCreate, TaskResponse, TaskUpdate
-from app.services.notification_service import NotificationService
 from app.services.task_service import TaskService
 
 router = APIRouter()
@@ -31,21 +29,15 @@ async def create_project_task(
     task_in: ProjectTaskCreate,
     current_user: CurrentUser,
     task_service: Annotated[TaskService, Depends(get_task_service)],
-    user_repo: Annotated[UserRepository, Depends(get_user_repository)],
     background_tasks: BackgroundTasks,
 ) -> TaskResponse:
     """Create a new task within the specified project."""
-    task = await task_service.create_project_task(project_id=id, current_user=current_user, task_in=task_in)
-    if task.assignee_id:
-        assignee = await user_repo.get_by_id(task.assignee_id)
-        if assignee:
-            background_tasks.add_task(
-                NotificationService.send_task_assignment_notification,
-                task_id=task.id,
-                task_title=task.title,
-                assignee_email=assignee.email,
-            )
-    return task
+    return await task_service.create_project_task(
+        project_id=id,
+        current_user=current_user,
+        task_in=task_in,
+        background_tasks=background_tasks,
+    )
 
 
 @router.get(
@@ -109,20 +101,13 @@ async def create_task(
     task_in: TaskCreate,
     current_user: CurrentUser,
     service: Annotated[TaskService, Depends(get_task_service)],
-    user_repo: Annotated[UserRepository, Depends(get_user_repository)],
     background_tasks: BackgroundTasks,
 ) -> TaskResponse:
-    task = await service.create_task(task_in=task_in, current_user=current_user)
-    if task.assignee_id:
-        assignee = await user_repo.get_by_id(task.assignee_id)
-        if assignee:
-            background_tasks.add_task(
-                NotificationService.send_task_assignment_notification,
-                task_id=task.id,
-                task_title=task.title,
-                assignee_email=assignee.email,
-            )
-    return task
+    return await service.create_task(
+        task_in=task_in,
+        current_user=current_user,
+        background_tasks=background_tasks,
+    )
 
 
 @router.get(
@@ -163,26 +148,14 @@ async def update_task(
     task_in: TaskUpdate,
     current_user: CurrentUser,
     service: Annotated[TaskService, Depends(get_task_service)],
-    user_repo: Annotated[UserRepository, Depends(get_user_repository)],
     background_tasks: BackgroundTasks,
 ) -> TaskResponse:
-    task = await service.update_task(task_id=id, task_in=task_in, current_user=current_user)
-    if task_in.status is not None:
-        recipient = None
-        if task.assignee_id:
-            assignee = await user_repo.get_by_id(task.assignee_id)
-            if assignee:
-                recipient = assignee.email
-        status_val = task.status.value if hasattr(task.status, "value") else str(task.status)
-        background_tasks.add_task(
-            NotificationService.send_task_status_update_notification,
-            task_id=task.id,
-            task_title=task.title,
-            old_status="UPDATED",
-            new_status=status_val,
-            recipient_email=recipient,
-        )
-    return task
+    return await service.update_task(
+        task_id=id,
+        task_in=task_in,
+        current_user=current_user,
+        background_tasks=background_tasks,
+    )
 
 
 @router.delete(
@@ -210,31 +183,20 @@ async def delete_task(
     response_model=MessageResponse,
     status_code=status.HTTP_200_OK,
     summary="Dispatch background reminder for task",
-    description="Enqueue an asynchronous task reminder notification to the assignee via BackgroundTasks.",
+    description="Enqueue an asynchronous task reminder notification to the assignee (EDITOR or OWNER only).",
     responses={
-        400: {"description": "Task does not have an assigned member"},
+        400: {"description": "Task does not have an assigned member or project is archived"},
         401: {"description": "Authentication required"},
-        404: {"description": "Task not found"},
+        403: {"description": "Permission denied (EDITOR role required)"},
+        404: {"description": "Task or assignee not found"},
     },
 )
 async def remind_task_assignee(
     id: Annotated[int, Path(ge=1, description="Task ID")],
     current_user: CurrentUser,
     service: Annotated[TaskService, Depends(get_task_service)],
-    user_repo: Annotated[UserRepository, Depends(get_user_repository)],
     background_tasks: BackgroundTasks,
 ) -> MessageResponse:
     """Send an asynchronous reminder to the task's assignee."""
-    task = await service.get_task(task_id=id, current_user=current_user)
-    if not task.assignee_id:
-        raise BadRequestException("Task does not have an assignee to remind.")
-
-    assignee = await user_repo.get_by_id(task.assignee_id)
-    assignee_email = assignee.email if assignee else f"user_{task.assignee_id}@taskhub.local"
-    background_tasks.add_task(
-        NotificationService.send_task_reminder,
-        task_id=task.id,
-        task_title=task.title,
-        assignee_email=assignee_email,
-    )
-    return MessageResponse(message=f"Reminder queued for task #{task.id} assignee ({assignee_email}).")
+    await service.remind_task(task_id=id, current_user=current_user, background_tasks=background_tasks)
+    return MessageResponse(message=MSG_REMINDER_QUEUED)

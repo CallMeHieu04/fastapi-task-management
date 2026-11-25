@@ -25,7 +25,7 @@ tags_metadata = [
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    description="TaskHub API — Hệ thống quản lý công việc và dự án.",
+    description=settings.PROJECT_DESCRIPTION,
     version=settings.VERSION,
     openapi_tags=tags_metadata,
     lifespan=lifespan,

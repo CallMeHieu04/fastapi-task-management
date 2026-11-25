@@ -7,7 +7,6 @@ from app.schemas.common import MessageResponse
 from app.schemas.token import RefreshTokenRequest, Token
 from app.schemas.user import UserCreate, UserLogin, UserResponse
 from app.services.auth_service import AuthService
-from app.services.notification_service import NotificationService
 
 router = APIRouter()
 
@@ -29,13 +28,7 @@ async def register(
     background_tasks: BackgroundTasks,
 ) -> UserResponse:
     """Register a new account. Role is assigned automatically by the system as MEMBER."""
-    user = await auth_service.register(user_in=user_in)
-    background_tasks.add_task(
-        NotificationService.send_welcome_email,
-        email=user.email,
-        full_name=user.full_name,
-    )
-    return user
+    return await auth_service.register(user_in=user_in, background_tasks=background_tasks)
 
 
 @router.post(
